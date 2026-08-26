@@ -23,12 +23,20 @@ def _env_int(name: str, default: int) -> int:
 
 # The watchlist the agents may trade in Phase 1. NSE tickers (yfinance uses the
 # `.NS` suffix); the synthetic feed just treats them as opaque symbol names.
+# The tradeable universe for the PAPER agents — liquid NSE large-caps across
+# sectors, chosen for tight spreads / realistic fills, NOT as investment picks.
+# (yfinance uses the `.NS` suffix for NSE.)
 DEFAULT_UNIVERSE: list[str] = [
-    "RELIANCE.NS",
-    "TCS.NS",
-    "HDFCBANK.NS",
-    "INFY.NS",
-    "ICICIBANK.NS",
+    "RELIANCE.NS",    # energy/conglomerate
+    "TCS.NS",         # IT
+    "HDFCBANK.NS",    # bank
+    "INFY.NS",        # IT
+    "ICICIBANK.NS",   # bank
+    "SBIN.NS",        # bank (PSU)
+    "BHARTIARTL.NS",  # telecom
+    "ITC.NS",         # FMCG
+    "LT.NS",          # infra/capital goods
+    "HINDUNILVR.NS",  # FMCG
 ]
 
 
@@ -36,7 +44,7 @@ DEFAULT_UNIVERSE: list[str] = [
 class ArenaConfig:
     # --- capital & risk (set once at round start, never touched by the agent) ---
     base_capital: float = _env_float("PIT_BASE_CAPITAL", 100_000.0)  # ₹ paper
-    stop_loss_pct: float = _env_float("PIT_STOP_LOSS_PCT", 15.0)      # hard constraint
+    stop_loss_pct: float = _env_float("PIT_STOP_LOSS_PCT", 10.0)      # hard constraint
     stake_delta_pct: float = _env_float("PIT_STAKE_DELTA_PCT", 20.0)  # winner +, loser -
 
     # --- round length (see build plan: 7-day rounds, shrink to a 4-day floor) ---
@@ -45,8 +53,9 @@ class ArenaConfig:
     min_round_days: int = _env_int("PIT_MIN_ROUND_DAYS", 4)
 
     # goal_pct is display-only narrative; winners are resolved by the return
-    # cascade, not by the goal. Scales with round length.
-    goal_pct_per_day: float = _env_float("PIT_GOAL_PCT_PER_DAY", 0.15)
+    # cascade, not by the goal. Scales with round length: 0.714/day => ~5% over
+    # a 7-day round (a stretch target to show, not a realistic expectation).
+    goal_pct_per_day: float = _env_float("PIT_GOAL_PCT_PER_DAY", 0.714)
 
     # --- how a "day" maps to price bars (so round length is real) ---
     # NSE trades ~375 minutes/day; at 15-min bars that's 25 bars per day. A
