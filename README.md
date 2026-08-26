@@ -36,8 +36,19 @@ No install needed for the offline path — the core uses only the standard
 library. For the optional paths:
 
 ```bash
-pip install -r requirements.txt   # yfinance (historical), groq (LLM), pytest
+pip install -r requirements.txt   # yfinance (historical), groq (LLM), flask, pytest
 ```
+
+### Dashboard
+
+A read-only web view of the arena (leaderboard with ELO sparklines, per-round
+trade ledgers, and each lineage's generation/mutation history):
+
+```bash
+python3 -m pit.web            # http://127.0.0.1:5001
+```
+
+It never writes, so it's safe to run against a live DB while the arena plays.
 
 ### Optional modes
 

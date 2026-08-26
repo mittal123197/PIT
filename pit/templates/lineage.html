@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ lineage.name }} — PIT{% endblock %}
+{% block body %}
+
+<a href="/" class="backlink">← leaderboard</a>
+
+<div style="display:flex;justify-content:space-between;align-items:flex-end;
+  flex-wrap:wrap;gap:16px;margin-bottom:8px;">
+  <div>
+    <div class="eyebrow">Lineage</div>
+    <h1 style="font-size:34px;">{{ lineage.name }}</h1>
+  </div>
+  <div style="text-align:right;">
+    <div style="font-family:'Space Grotesk';font-weight:700;font-size:28px;">
+      {{ '%.0f'|format(generations[0].rating if generations else 1000) }}</div>
+    <div class="muted mono" style="font-size:11px;">ELO RATING</div>
+    <div style="margin-top:6px;">{{ rating_timeline|spark }}</div>
+  </div>
+</div>
+
+<div class="cards" style="margin:22px 0 34px;">
+  <div class="stat"><div class="big">{{ lineage.wins }}–{{ lineage.losses }}</div>
+    <div class="lbl">Win – Loss</div></div>
+  <div class="stat"><div class="big">{{ generations|length }}</div>
+    <div class="lbl">Generations</div></div>
+  <div class="stat"><div class="big {{ 'up' if lineage.cumulative_return_pct >= 0 else 'down' }}">
+    {{ lineage.cumulative_return_pct|pct }}</div>
+    <div class="lbl">Cumulative return</div></div>
+  <div class="stat"><div class="big">{{ lineage.current_stake|money }}</div>
+    <div class="lbl">Current stake</div></div>
+</div>
+
+<div class="eyebrow">Generations — newest first</div>
+{% for g in generations %}
+  <div class="panel">
+    <h2 style="display:flex;justify-content:space-between;align-items:center;">
+      <span>Generation {{ g.generation }}
+        {% if g.id == current_agent_id %}
+          <span class="pill win" style="margin-left:8px;">active</span>{% endif %}
+      </span>
+      <span class="mono muted" style="font-size:12px;">ELO {{ '%.0f'|format(g.rating) }}</span>
+    </h2>
+    <div style="padding:16px 20px;">
+      {% if g.mutation_note %}
+        <p class="note" style="margin:0 0 14px;">↳ mutated from a winner: {{ g.mutation_note }}</p>
+      {% else %}
+        <p class="muted" style="margin:0 0 14px;font-size:12.5px;">seed generation (no ancestor)</p>
+      {% endif %}
+      <pre class="cfg">{{ g.config_pretty }}</pre>
+    </div>
+  </div>
+{% endfor %}
+
+{% endblock %}

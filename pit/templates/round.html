@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Round #{{ round.round_number }} — PIT{% endblock %}
+{% block body %}
+
+<a href="/" class="backlink">← all rounds</a>
+
+<div class="eyebrow">Round #{{ round.round_number }} · {{ round.length_days }} days ·
+  goal {{ round.goal_pct }}%</div>
+
+<div class="grid2" style="margin-bottom:26px;">
+  {% for s in states %}
+    {% set won = result and result.winner_agent_id == s.agent_id %}
+    <div class="panel" style="margin-bottom:0;
+      border-color:{{ 'var(--alpha)' if won else 'var(--line)' }};">
+      <h2 style="display:flex;justify-content:space-between;align-items:center;">
+        <a href="/lineage/{{ s.lineage_id }}"><span class="agentname">{{ s.lineage }}</span></a>
+        {% if won %}<span class="pill win">winner</span>
+        {% elif result %}<span class="pill lose">loser</span>{% endif %}
+      </h2>
+      <div style="padding:16px 20px;">
+        <div style="font-family:'Space Grotesk';font-weight:700;font-size:26px;"
+          class="{{ 'up' if s.final_return_pct is not none and s.final_return_pct >= 0 else 'down' }}">
+          {{ s.final_return_pct|pct }}
+        </div>
+        <table style="margin-top:12px;">
+          <tr><td class="muted" style="padding:6px 0;border:none;">Generation</td>
+              <td class="mono" style="padding:6px 0;border:none;text-align:right;">{{ s.generation }}</td></tr>
+          <tr><td class="muted" style="padding:6px 0;border:none;">Trades</td>
+              <td class="mono" style="padding:6px 0;border:none;text-align:right;">{{ s.trade_count }}</td></tr>
+          <tr><td class="muted" style="padding:6px 0;border:none;">Max drawdown</td>
+              <td class="mono down" style="padding:6px 0;border:none;text-align:right;">{{ '%.2f'|format(s.max_drawdown_pct) }}%</td></tr>
+          <tr><td class="muted" style="padding:6px 0;border:none;">Start capital</td>
+              <td class="mono" style="padding:6px 0;border:none;text-align:right;">{{ s.starting_capital|money }}</td></tr>
+          <tr><td class="muted" style="padding:6px 0;border:none;">Status</td>
+              <td style="padding:6px 0;border:none;text-align:right;">
+                <span class="pill status">{{ s.status }}</span></td></tr>
+        </table>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+{% if result %}
+<p class="muted" style="margin:-8px 0 26px;font-size:13px;">
+  Resolved by <span class="pill reason">{{ result.resolution_reason }}</span>
+  — ELO shifted {{ '%.1f'|format(result.rating_delta) }} points.
+</p>
+{% endif %}
+
+<div class="eyebrow">Trade ledger — {{ trades|length }} fills</div>
+<div class="panel">
+  <table>
+    <thead><tr>
+      <th>Lineage</th><th>Side</th><th>Qty</th><th>Symbol</th><th>Price</th>
+      <th class="hide-sm">Cash after</th><th class="hide-sm">Reason</th>
+    </tr></thead>
+    <tbody>
+    {% for t in trades %}
+      <tr>
+        <td class="agentname">{{ t.lineage }}</td>
+        <td><span class="pill {{ 'win' if t.side == 'buy' else 'lose' }}">{{ t.side }}</span></td>
+        <td class="mono">{{ '%.0f'|format(t.qty) }}</td>
+        <td class="mono">{{ t.symbol }}</td>
+        <td class="mono">₹{{ '%.2f'|format(t.price) }}</td>
+        <td class="mono hide-sm">{{ t.capital_after|money }}</td>
+        <td class="muted hide-sm" style="font-size:12px;">{{ t.reason or '' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted" style="padding:22px;">No trades in this round.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

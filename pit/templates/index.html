@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block body %}
+
+<div class="cards">
+  <div class="stat"><div class="big">{{ summary.resolved_rounds }}</div>
+    <div class="lbl">Rounds resolved</div></div>
+  <div class="stat"><div class="big">{{ summary.lineages }}</div>
+    <div class="lbl">Lineages</div></div>
+  <div class="stat"><div class="big">{{ summary.total_trades }}</div>
+    <div class="lbl">Total trades</div></div>
+  <div class="stat"><div class="big">{{ summary.last_round_days or '—' }}<span
+    style="font-size:13px;" class="muted">d</span></div>
+    <div class="lbl">Latest round length</div></div>
+</div>
+
+<div class="eyebrow">Standings — ranked by ELO</div>
+<div class="panel">
+  <table>
+    <thead><tr>
+      <th>#</th><th>Lineage</th><th>Rating</th><th class="hide-sm">Trend</th>
+      <th>W–L</th><th>Gen</th><th class="hide-sm">Cumulative</th><th>Stake</th>
+    </tr></thead>
+    <tbody>
+    {% for r in board %}
+      <tr class="clickable" onclick="location='/lineage/{{ r.id }}'">
+        <td class="rank">{{ r.position }}</td>
+        <td class="agentname">{{ r.name }}</td>
+        <td class="mono">{{ '%.0f'|format(r.rating) }}</td>
+        <td class="hide-sm">{{ r.rating_timeline|spark }}</td>
+        <td class="mono">{{ r.wins }}–{{ r.losses }}</td>
+        <td class="mono">{{ r.generation }}</td>
+        <td class="hide-sm {{ 'up' if r.cumulative_return_pct >= 0 else 'down' }}">
+          {{ r.cumulative_return_pct|pct }}</td>
+        <td class="mono">{{ r.current_stake|money }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted" style="padding:22px;">
+        No lineages yet — run <span class="mono">pit.cli init</span> then
+        <span class="mono">pit.cli arena</span>.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="eyebrow">Recent rounds</div>
+<div class="panel">
+  <table>
+    <thead><tr>
+      <th>Round</th><th class="hide-sm">Length</th><th>Result</th>
+      <th>Winner</th><th class="hide-sm">Returns</th><th>ELO Δ</th>
+    </tr></thead>
+    <tbody>
+    {% for r in rounds %}
+      <tr class="clickable" onclick="location='/round/{{ r.id }}'">
+        <td class="mono">#{{ r.round_number }}</td>
+        <td class="mono hide-sm">{{ r.length_days }}d</td>
+        <td>
+          {% if r.status == 'resolved' %}
+            <span class="pill reason">{{ r.resolution_reason }}</span>
+          {% else %}
+            <span class="pill status">running</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.winner %}<span class="agentname up">{{ r.winner }}</span>
+            <span class="muted"> beat </span>{{ r.loser }}{% else %}—{% endif %}
+        </td>
+        <td class="mono hide-sm">
+          {% if r.winner_return_pct is not none %}
+            <span class="up">{{ r.winner_return_pct|pct }}</span>
+            <span class="muted"> / </span>
+            <span class="down">{{ r.loser_return_pct|pct }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="mono">{% if r.rating_delta is not none %}+{{ '%.1f'|format(r.rating_delta) }}{% else %}—{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted" style="padding:22px;">No rounds yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

@@ -11,5 +11,8 @@ groq>=0.11
 # Loads .env in local dev
 python-dotenv>=1.0
 
+# Dashboard (Phase 2)
+flask>=3.0
+
 # Tests
 pytest>=8.0
