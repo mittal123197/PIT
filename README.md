@@ -56,10 +56,16 @@ It never writes, so it's safe to run against a live DB while the arena plays.
 |------|-----|-------|
 | Offline (default) | `python3 -m pit.cli arena` | nothing |
 | Real NSE replay | `... arena --feed historical` | `yfinance`, network |
-| LLM agents + mutation | `PIT_USE_LLM=1 python3 -m pit.cli arena` | `groq`, `GROQ_API_KEY` |
+| LLM agents + mutation | `PIT_USE_LLM=1 python3 -m pit.cli run-round --bars 12` | `groq`, `GROQ_API_KEY` |
 | Agents aware of stakes | `PIT_AGENT_AWARE=1` (default) | — |
 
 Copy `.env.example` → `.env` to configure keys and tuning.
+
+**On LLM runs:** every agent wake is one Groq call, so keep the synthetic feed
+short with `--bars` (e.g. 12) while experimenting. Default model is
+`openai/gpt-oss-20b` (fast); set `PIT_LLM_MODEL=openai/gpt-oss-120b` for
+stronger play at the cost of speed, and `PIT_LLM_REASONING=low|medium|high` to
+trade latency for depth on gpt-oss models.
 
 ## Run the tests
 

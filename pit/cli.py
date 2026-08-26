@@ -45,13 +45,16 @@ def _engine(conn, use_llm: bool) -> Engine:
                   mutate_fn=mutate_with_llm, use_llm=use_llm)
 
 
-def _make_feed(kind: str, round_number: int):
+def _make_feed(kind: str, round_number: int, bars: int | None = None):
     if kind == "historical":
         try:
             return HistoricalFeed(DEFAULT.universe)
         except Exception as exc:
             print(f"  historical feed unavailable ({exc}); falling back to synthetic")
-    return SyntheticFeed(DEFAULT.universe, seed=1000 + round_number)
+    kwargs = {"seed": 1000 + round_number}
+    if bars:
+        kwargs["bars"] = bars
+    return SyntheticFeed(DEFAULT.universe, **kwargs)
 
 
 def _lineage_ids(conn) -> list[int]:
@@ -87,7 +90,7 @@ def cmd_run_round(args):
     if len(ids) < 2:
         print("Need at least 2 lineages. Run `init` first.")
         return
-    feed = _make_feed(args.feed, eng._next_round_number())
+    feed = _make_feed(args.feed, eng._next_round_number(), args.bars)
     out = eng.run_round(ids[0], ids[1], feed=feed)
     _print_outcome(out)
     _print_reflection(eng.last_reflection)
@@ -103,7 +106,7 @@ def cmd_arena(args):
         print("Need at least 2 lineages. Run `init` first.")
         return
     for _ in range(args.rounds):
-        feed = _make_feed(args.feed, eng._next_round_number())
+        feed = _make_feed(args.feed, eng._next_round_number(), args.bars)
         out = eng.run_round(ids[0], ids[1], feed=feed)
         _print_outcome(out)
         _print_reflection(eng.last_reflection)
@@ -234,11 +237,13 @@ def main(argv=None):
 
     pr = sub.add_parser("run-round", help="run a single duel")
     pr.add_argument("--feed", choices=["synthetic", "historical"], default="synthetic")
+    pr.add_argument("--bars", type=int, help="synthetic feed length (LLM runs: keep small)")
     pr.set_defaults(func=cmd_run_round)
 
     pa = sub.add_parser("arena", help="run several duels")
     pa.add_argument("--rounds", type=int, default=5)
     pa.add_argument("--feed", choices=["synthetic", "historical"], default="synthetic")
+    pa.add_argument("--bars", type=int, help="synthetic feed length (LLM runs: keep small)")
     pa.set_defaults(func=cmd_arena)
 
     pl = sub.add_parser("leaderboard", help="show standings")

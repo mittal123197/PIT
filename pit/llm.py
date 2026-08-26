@@ -30,7 +30,7 @@ def _client():
     return groq.Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 
-DEFAULT_MODEL = os.getenv("PIT_LLM_MODEL", "llama-3.3-70b-versatile")
+DEFAULT_MODEL = os.getenv("PIT_LLM_MODEL", "openai/gpt-oss-20b")
 
 
 # Whether agents are told the evolutionary stakes. Toggle to run the same
@@ -71,6 +71,13 @@ class LLMPolicy(AgentPolicy):
     def __init__(self, model: str = DEFAULT_MODEL) -> None:
         self.model = model
 
+    def _extra(self) -> dict:
+        # gpt-oss models support a reasoning_effort knob; low keeps the hot
+        # decision path fast enough to run many wakes per round.
+        if "gpt-oss" in self.model:
+            return {"reasoning_effort": os.getenv("PIT_LLM_REASONING", "low")}
+        return {}
+
     def decide(self, ctx: AgentContext) -> list[Action]:
         try:
             payload = {
@@ -98,6 +105,7 @@ class LLMPolicy(AgentPolicy):
                 ],
                 temperature=0.7,
                 response_format={"type": "json_object"},
+                **self._extra(),
             )
             data = json.loads(resp.choices[0].message.content)
             return self._parse(data)
