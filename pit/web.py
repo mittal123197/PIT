@@ -52,6 +52,7 @@ def index():
         summary=q.arena_summary(conn),
         board=q.leaderboard(conn),
         rounds=q.recent_rounds(conn),
+        constitution=q.guidelines_overview(conn),
     )
 
 

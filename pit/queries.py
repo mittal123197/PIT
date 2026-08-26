@@ -154,6 +154,18 @@ def arena_summary(conn: sqlite3.Connection) -> dict:
     }
 
 
+def guidelines_overview(conn: sqlite3.Connection) -> dict:
+    active = _rows(conn.execute(
+        "SELECT * FROM guidelines WHERE status='active' ORDER BY id"))
+    proposals = _rows(conn.execute(
+        """SELECT p.id, p.kind, p.proposed_text, p.resolution,
+                  SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
+           FROM guideline_proposals p
+           LEFT JOIN guideline_votes v ON v.proposal_id = p.id
+           GROUP BY p.id ORDER BY p.id DESC LIMIT 8"""))
+    return {"active": active, "proposals": proposals}
+
+
 def sparkline(values: list[float], width: int = 120, height: int = 28) -> str:
     """Return an inline SVG polyline — no JS, works offline and in any theme."""
     if not values or len(values) < 2:

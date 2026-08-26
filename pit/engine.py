@@ -70,9 +70,12 @@ class Engine:
         broker: Broker | None = None,
         policy_factory=None,
         mutate_fn=None,
+        use_llm: bool = False,
     ) -> None:
         self.conn = conn
         self.config = config
+        self.use_llm = use_llm
+        self.last_reflection: dict | None = None
         self.broker = broker or PaperBroker(
             per_order_fee=config.per_order_fee, allow_short=config.allow_short
         )
@@ -157,12 +160,24 @@ class Engine:
             )
         self.conn.commit()
 
-        self._simulate(feed, runs, goal_pct, round_id=round_id, persist=True)
+        from . import guidelines as gmod
+        active = gmod.active_texts(self.conn)
+
+        self._simulate(feed, runs, goal_pct, round_id=round_id, persist=True,
+                       guidelines=active)
         final_prices = feed.prices()
         self._persist_final_states(round_id, runs, final_prices)
 
-        return self._resolve_round(round_id, round_number, length_days,
-                                   la, lb, agent_a, agent_b, runs, final_prices)
+        outcome = self._resolve_round(round_id, round_number, length_days,
+                                      la, lb, agent_a, agent_b, runs, final_prices)
+
+        # reflection pass: every N rounds the pool may vote on a shared guideline
+        self.last_reflection = None
+        if (self.config.reflection_enabled
+                and round_number % self.config.reflection_interval == 0):
+            self.last_reflection = gmod.open_and_resolve(
+                self.conn, self.config, round_id, self.use_llm)
+        return outcome
 
     def _make_run(self, agent_row, stake: float) -> _AgentRun:
         cfg = json.loads(agent_row["strategy_config"])
@@ -178,8 +193,10 @@ class Engine:
         )
 
     def _simulate(self, feed: PriceFeed, runs: dict[int, _AgentRun],
-                  goal_pct: float, round_id: int | None, persist: bool) -> None:
+                  goal_pct: float, round_id: int | None, persist: bool,
+                  guidelines: list[str] | None = None) -> None:
         """Step the feed bar-by-bar, waking + executing agents. The core loop."""
+        guidelines = guidelines or []
         history: dict[str, list[float]] = {s: [] for s in feed.symbols}
         total_bars = len(feed)
         bar_index = 0
@@ -227,6 +244,7 @@ class Engine:
                     universe=list(feed.symbols), strategy_config=run.config,
                     goal_pct=goal_pct, bars_remaining=bars_remaining,
                     opponent_return_pct=opp_return, opponent_liquidated=opp_liq,
+                    guidelines=guidelines,
                 )
                 self._execute(run, run.policy.decide(ctx), prices, now, round_id, persist)
 

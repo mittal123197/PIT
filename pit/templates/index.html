@@ -42,6 +42,44 @@
   </table>
 </div>
 
+<div class="eyebrow">The constitution — shared guidelines, changed only by vote</div>
+<div class="panel">
+  <div style="padding:16px 20px;">
+    {% if constitution.active %}
+      {% for gl in constitution.active %}
+        <div style="display:flex;gap:12px;align-items:baseline;padding:8px 0;
+          {% if not loop.last %}border-bottom:1px solid var(--line);{% endif %}">
+          <span class="pill win">v{{ gl.version }}</span>
+          <span style="font-size:13.5px;">{{ gl.text }}</span>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="muted" style="font-size:13px;margin:0;">
+        No guidelines adopted yet — a reflection pass proposes one when a pattern
+        recurs, and the pool votes (strict majority carries it).</p>
+    {% endif %}
+  </div>
+  {% if constitution.proposals %}
+  <table>
+    <thead><tr><th>Proposal</th><th>Type</th><th>Vote</th><th>Outcome</th></tr></thead>
+    <tbody>
+    {% for p in constitution.proposals %}
+      <tr>
+        <td style="max-width:520px;">{{ p.proposed_text }}</td>
+        <td><span class="pill status">{{ p.kind }}</span></td>
+        <td class="mono">{{ p.agree or 0 }}/{{ p.total or 0 }}</td>
+        <td>
+          {% if p.resolution == 'accepted' %}<span class="pill win">adopted</span>
+          {% elif p.resolution == 'rejected' %}<span class="pill lose">rejected</span>
+          {% else %}<span class="pill status">open</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
 <div class="eyebrow">Recent rounds</div>
 <div class="panel">
   <table>

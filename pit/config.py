@@ -52,6 +52,15 @@ class ArenaConfig:
     elo_k: float = _env_float("PIT_ELO_K", 32.0)
     elo_base: float = _env_float("PIT_ELO_BASE", 1000.0)
 
+    # --- shared guidelines ("constitution") ---
+    # A reflection pass runs every N rounds, drafting at most one proposal only
+    # if a pattern recurs — "worked once" doesn't qualify. Every lineage then
+    # votes; a strict majority is required (ties keep the status quo).
+    reflection_enabled: bool = os.getenv("PIT_REFLECTION", "1") not in ("0", "false", "False")
+    reflection_interval: int = _env_int("PIT_REFLECTION_INTERVAL", 5)
+    reflection_min_sample: int = _env_int("PIT_REFLECTION_MIN_SAMPLE", 3)
+    reflection_pattern_frac: float = _env_float("PIT_REFLECTION_PATTERN_FRAC", 0.6)
+
     # --- execution ---
     per_order_fee: float = _env_float("PIT_PER_ORDER_FEE", 0.0)  # Dhan: ₹0 delivery
     allow_short: bool = False  # Phase 1: long-only paper trading

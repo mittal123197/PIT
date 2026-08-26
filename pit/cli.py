@@ -42,7 +42,7 @@ def _policy_factory(use_llm: bool):
 def _engine(conn, use_llm: bool) -> Engine:
     from .llm import mutate_with_llm
     return Engine(conn, config=DEFAULT, policy_factory=_policy_factory(use_llm),
-                  mutate_fn=mutate_with_llm)
+                  mutate_fn=mutate_with_llm, use_llm=use_llm)
 
 
 def _make_feed(kind: str, round_number: int):
@@ -90,6 +90,7 @@ def cmd_run_round(args):
     feed = _make_feed(args.feed, eng._next_round_number())
     out = eng.run_round(ids[0], ids[1], feed=feed)
     _print_outcome(out)
+    _print_reflection(eng.last_reflection)
 
 
 def cmd_arena(args):
@@ -105,8 +106,38 @@ def cmd_arena(args):
         feed = _make_feed(args.feed, eng._next_round_number())
         out = eng.run_round(ids[0], ids[1], feed=feed)
         _print_outcome(out)
+        _print_reflection(eng.last_reflection)
     print()
     _print_leaderboard(conn)
+
+
+def cmd_guidelines(args):
+    from . import guidelines as gmod
+    conn = dbm.connect()
+    dbm.init_db(conn)
+    active = gmod.active_guidelines(conn)
+    print("\nActive guidelines (the pool's constitution)")
+    print("-" * 68)
+    if not active:
+        print("  (none yet — a reflection pass proposes one every "
+              f"{DEFAULT.reflection_interval} rounds if a pattern recurs)")
+    for g in active:
+        print(f"  #{g['id']} (v{g['version']}): {g['text']}")
+
+    props = conn.execute(
+        """SELECT p.id, p.kind, p.proposed_text, p.resolution,
+                  SUM(v.vote='agree') agree, COUNT(v.id) total
+           FROM guideline_proposals p
+           LEFT JOIN guideline_votes v ON v.proposal_id = p.id
+           GROUP BY p.id ORDER BY p.id DESC LIMIT 10""",
+    ).fetchall()
+    if props:
+        print("\nRecent proposals")
+        print("-" * 68)
+        for p in props:
+            res = p["resolution"] or "open"
+            print(f"  #{p['id']} [{p['kind']}] {res} "
+                  f"({p['agree'] or 0}/{p['total'] or 0} agreed): {p['proposed_text']}")
 
 
 def cmd_leaderboard(args):
@@ -165,6 +196,15 @@ def _print_outcome(out):
     print(f"  mutation → {out.loser_lineage}: {out.mutation_note}")
 
 
+def _print_reflection(ref):
+    if not ref:
+        return
+    verdict = "ADOPTED" if ref["accepted"] else "rejected"
+    print(f"  reflection → proposal to {ref['kind']} a guideline "
+          f"[{verdict}, {ref['agree']}/{ref['total']} agreed]")
+    print(f"             \"{ref['text']}\"")
+
+
 def _print_leaderboard(conn):
     rows = conn.execute(
         """SELECT l.name, l.wins, l.losses, l.cumulative_return_pct,
@@ -203,6 +243,9 @@ def main(argv=None):
 
     pl = sub.add_parser("leaderboard", help="show standings")
     pl.set_defaults(func=cmd_leaderboard)
+
+    pg = sub.add_parser("guidelines", help="show the pool's shared guidelines")
+    pg.set_defaults(func=cmd_guidelines)
 
     ph = sub.add_parser("history", help="show round results / trades")
     ph.add_argument("--round", type=int, help="show trades for this round id")

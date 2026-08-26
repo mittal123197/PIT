@@ -125,6 +125,66 @@ class LLMPolicy(AgentPolicy):
         return out or [Hold(reason="no actions")]
 
 
+def llm_draft_guideline(sample: list[dict], active: list[str]) -> dict | None:
+    """Ask the model for at most one shared guideline, or None. Fallback-safe."""
+    if not groq_available():
+        return None
+    try:
+        prompt = {
+            "recent_rounds_winner_vs_loser": sample,
+            "already_active_guidelines": active,
+            "instruction": (
+                "You maintain a shared rulebook for a pool of trading agents. "
+                "Looking at recent rounds, if — and only if — a pattern RECURS "
+                "across multiple rounds (not a one-off), propose ONE new guideline "
+                "to add, or one existing one to remove if it no longer holds. "
+                "Return JSON {\"kind\":\"add\"|\"remove\",\"text\":\"...\",\"tag\":\"...\","
+                "\"evidence\":\"...\"} or {\"kind\":\"none\"} if nothing recurs."
+            ),
+        }
+        resp = _client().chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=[
+                {"role": "system", "content": "You curate trading guidelines. JSON only."},
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+            temperature=0.4,
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(resp.choices[0].message.content)
+        if data.get("kind") not in ("add", "remove") or not data.get("text"):
+            return None
+        data.setdefault("guideline_id", None)
+        data.setdefault("evidence", "llm-identified pattern")
+        return data
+    except Exception:
+        return None
+
+
+def llm_vote_guideline(strategy_cfg: dict, proposal: dict) -> tuple[str, str]:
+    """One lineage's agent votes on a proposal. Fallback handled by caller."""
+    prompt = {
+        "your_strategy": strategy_cfg,
+        "proposal_kind": proposal["kind"],
+        "proposed_guideline": proposal["text"],
+        "instruction": ("Vote whether this shared guideline should apply to the "
+                        "whole pool (including you). Return JSON "
+                        "{\"vote\":\"agree\"|\"disagree\",\"reasoning\":\"...\"}."),
+    }
+    resp = _client().chat.completions.create(
+        model=DEFAULT_MODEL,
+        messages=[
+            {"role": "system", "content": "You vote on trading guidelines. JSON only."},
+            {"role": "user", "content": json.dumps(prompt)},
+        ],
+        temperature=0.5,
+        response_format={"type": "json_object"},
+    )
+    data = json.loads(resp.choices[0].message.content)
+    vote = "agree" if data.get("vote") == "agree" else "disagree"
+    return vote, str(data.get("reasoning", ""))[:200]
+
+
 def mutate_with_llm(
     winner_cfg: dict, loser_cfg: dict, winner_trades: list[dict], seed: int = 0
 ) -> tuple[dict, str]:
