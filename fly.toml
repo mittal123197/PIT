@@ -1,0 +1,30 @@
+# Fly.io config for the PIT arena. Rename `app` to something globally unique
+# before deploying (see DEPLOY.md). One always-on Machine + a persistent volume
+# for the SQLite file.
+
+app = "pit-arena"
+primary_region = "sin"   # Singapore — closest Fly region to India
+
+[build]
+
+[env]
+  PIT_DB_PATH = "/data/pit.db"
+  PIT_ROUND_INTERVAL = "300"   # seconds between rounds (watchable pace)
+  PIT_BARS = "120"             # synthetic feed length per round
+  # PIT_USE_LLM = "1"          # uncomment + set GROQ_API_KEY secret for LLM agents
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep the Machine running so the arena loop never stops.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[mounts]]
+  source = "pit_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

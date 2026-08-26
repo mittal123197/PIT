@@ -50,6 +50,18 @@ python3 -m pit.web            # http://127.0.0.1:5001
 
 It never writes, so it's safe to run against a live DB while the arena plays.
 
+### Always-on (local or deployed)
+
+Run the arena loop + dashboard in one process (a new round every
+`PIT_ROUND_INTERVAL` seconds):
+
+```bash
+python3 -m pit.serve          # http://127.0.0.1:8080
+```
+
+This is exactly what the container runs. To ship it to Fly.io, see
+[DEPLOY.md](DEPLOY.md).
+
 ### Optional modes
 
 | Mode | How | Needs |
@@ -115,8 +127,9 @@ rewrite:
 ## Roadmap
 
 1. **Phase 1 — Paper MVP (this).** Offline core, one duel, CLI.
-2. **Phase 2 — Deploy + automate.** Always-on tick loop, guideline voting, web
-   dashboard. (Fly.io free VM + persistent volume for the SQLite file.)
+2. **Phase 2 — Deploy + automate.** ✅ Always-on arena loop (`pit.serve` /
+   `pit.daemon`), guideline voting, web dashboard, containerised for Fly.io
+   (persistent volume for the SQLite file — see [DEPLOY.md](DEPLOY.md)).
 3. **Phase 3 — Pool.** N agents, ladder/round-robin matchmaking.
 4. **Phase 4 — Live.** DhanHQ behind the `Broker` interface, real capital, ITR
    statements via Dhan↔ClearTax/Quicko.

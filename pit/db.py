@@ -29,9 +29,13 @@ def connect(db_path: str | None = None) -> sqlite3.Connection:
     """Open a connection with rows accessible by column name and FKs enforced."""
     path = db_path or DEFAULT_DB_PATH
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets the dashboard (reader) and the arena daemon (writer) share the
+    # file concurrently — needed once both run in the deployed container.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
