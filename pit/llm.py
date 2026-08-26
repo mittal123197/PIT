@@ -53,8 +53,14 @@ more risk to catch up; if you are comfortably ahead, protect the lead. Survive.
 
 _AGENT_SYSTEM = """You are an autonomous paper-trading agent competing in a \
 head-to-head duel. You start each round with fixed capital and a deadline. Your \
-only hard constraint is a stop-loss; everything else — when to trade, how much, \
-how often to check the market — is your call.
+goal: generate the highest return while avoiding losses. Your only hard \
+constraint is a stop-loss; everything else — WHICH stocks to trade, when, how \
+much, how often to check the market — is entirely your call.
+
+You are given a `market_scan`: every stock you may trade, with its current price \
+and recent momentum (ret5 = 5-bar % change, ret20 = 20-bar). Do your own \
+research on it — pick whichever stocks you judge best, concentrate or diversify \
+as you see fit. You are NOT limited to any shortlist; the whole scan is yours.
 """ + (_STAKES if AGENT_AWARE else "") + """
 You may return a JSON object with an "actions" array. Each action is one of:
   {"tool":"place_order","symbol":S,"side":"buy"|"sell","qty":N,"reason":R}
@@ -78,15 +84,30 @@ class LLMPolicy(AgentPolicy):
             return {"reasoning_effort": os.getenv("PIT_LLM_REASONING", "low")}
         return {}
 
+    @staticmethod
+    def _market_scan(ctx: AgentContext) -> list[dict]:
+        """The agent's research surface: every tradeable stock with recent
+        momentum, sorted strongest-first so the model can rank and choose."""
+        def ret(hist, n):
+            return round((hist[-1] / hist[-1 - n] - 1) * 100, 2) if len(hist) > n else None
+        rows = []
+        for sym in ctx.universe:
+            h = ctx.history.get(sym, [])
+            rows.append({
+                "sym": sym,
+                "price": round(ctx.prices.get(sym, h[-1] if h else 0.0), 2),
+                "ret5": ret(h, 5),
+                "ret20": ret(h, 20),
+                "held": ctx.positions.get(sym, 0),
+            })
+        rows.sort(key=lambda r: (r["ret5"] is not None, r["ret5"] or -999), reverse=True)
+        return rows
+
     def decide(self, ctx: AgentContext) -> list[Action]:
         try:
             payload = {
                 "now": ctx.now.isoformat(),
-                "universe": ctx.universe,
-                "prices": {k: round(v, 2) for k, v in ctx.prices.items()},
-                "recent_history": {
-                    k: [round(x, 2) for x in v[-8:]] for k, v in ctx.history.items()
-                },
+                "market_scan": self._market_scan(ctx),
                 "cash": round(ctx.cash, 2),
                 "positions": ctx.positions,
                 "return_pct": round(ctx.return_pct, 3),

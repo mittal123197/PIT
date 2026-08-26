@@ -151,19 +151,26 @@ class HistoricalFeed(PriceFeed):
                 except Exception:
                     series = None
             if series is None:
-                df = yf.download(
-                    sym, period=self.period, interval=self.interval,
-                    progress=False, auto_adjust=True,
-                )
-                if df is None or df.empty:
-                    raise RuntimeError(f"no data returned for {sym}")
-                close = df["Close"]
-                if hasattr(close, "columns"):  # multiindex when >1 symbol
-                    close = close.iloc[:, 0]
-                series = close.dropna()
-                series.name = "close"
-                series.to_frame().to_csv(cache)
+                try:
+                    df = yf.download(
+                        sym, period=self.period, interval=self.interval,
+                        progress=False, auto_adjust=True,
+                    )
+                    if df is None or df.empty:
+                        raise ValueError("no data")
+                    close = df["Close"]
+                    if hasattr(close, "columns"):  # multiindex when >1 symbol
+                        close = close.iloc[:, 0]
+                    series = close.dropna()
+                    series.name = "close"
+                    series.to_frame().to_csv(cache)
+                except Exception:
+                    # a single bad/illiquid ticker shouldn't sink the whole
+                    # universe — skip it and keep the rest
+                    continue
             frames[sym] = series
+        # narrow the tradeable set to whatever actually returned data
+        self.symbols = [s for s in self.symbols if s in frames]
 
         # align all symbols on their common timestamps
         common = None

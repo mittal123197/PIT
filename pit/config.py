@@ -23,21 +23,52 @@ def _env_int(name: str, default: int) -> int:
 
 # The watchlist the agents may trade in Phase 1. NSE tickers (yfinance uses the
 # `.NS` suffix); the synthetic feed just treats them as opaque symbol names.
-# The tradeable universe for the PAPER agents — liquid NSE large-caps across
-# sectors, chosen for tight spreads / realistic fills, NOT as investment picks.
-# (yfinance uses the `.NS` suffix for NSE.)
-DEFAULT_UNIVERSE: list[str] = [
-    "RELIANCE.NS",    # energy/conglomerate
-    "TCS.NS",         # IT
-    "HDFCBANK.NS",    # bank
-    "INFY.NS",        # IT
-    "ICICIBANK.NS",   # bank
-    "SBIN.NS",        # bank (PSU)
-    "BHARTIARTL.NS",  # telecom
-    "ITC.NS",         # FMCG
-    "LT.NS",          # infra/capital goods
-    "HINDUNILVR.NS",  # FMCG
+# The candidate MARKET the agents research and pick from — deliberately spanning
+# large, mid and small caps so there's NO cap bias baked in by us. The agents
+# choose which of these to trade; nothing here is a recommendation.
+#
+# This built-in list is just a starting pool. To hand the agents the entire
+# market instead, set PIT_UNIVERSE="TICK1.NS,TICK2.NS,..." or point
+# PIT_UNIVERSE_FILE at a newline-separated list (e.g. the full NSE equity list).
+# The historical feed drops any ticker that doesn't return data, so an
+# over-broad list is safe.
+_BUILTIN_UNIVERSE: list[str] = [
+    # large cap
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
+    "HINDUNILVR.NS", "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS",
+    "LT.NS", "BAJFINANCE.NS", "AXISBANK.NS", "ASIANPAINT.NS", "MARUTI.NS",
+    "HCLTECH.NS", "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS", "WIPRO.NS",
+    "NTPC.NS", "POWERGRID.NS", "M&M.NS", "TATAMOTORS.NS", "TATASTEEL.NS",
+    "JSWSTEEL.NS", "ADANIENT.NS", "ADANIPORTS.NS", "COALINDIA.NS", "ONGC.NS",
+    # mid cap
+    "DIXON.NS", "PERSISTENT.NS", "COFORGE.NS", "POLYCAB.NS", "ASTRAL.NS",
+    "PAGEIND.NS", "MPHASIS.NS", "AUBANK.NS", "FEDERALBNK.NS", "IDFCFIRSTB.NS",
+    "INDHOTEL.NS", "TVSMOTOR.NS", "ASHOKLEY.NS", "BHARATFORG.NS", "CUMMINSIND.NS",
+    "HAVELLS.NS", "GODREJCP.NS", "MARICO.NS", "PIDILITIND.NS", "TATAPOWER.NS",
+    "GAIL.NS", "VEDL.NS", "SAIL.NS", "PFC.NS", "RECLTD.NS",
+    "IRCTC.NS", "DMART.NS", "TRENT.NS", "LTIM.NS", "APOLLOHOSP.NS",
+    # small / newer listings
+    "PAYTM.NS", "NYKAA.NS", "POLICYBZR.NS", "IEX.NS", "CDSL.NS",
+    "BSE.NS", "ANGELONE.NS", "KPITTECH.NS", "TATAELXSI.NS", "SUZLON.NS",
+    "IRFC.NS", "YESBANK.NS", "IDEA.NS", "ZEEL.NS", "RVNL.NS",
 ]
+
+
+def resolve_universe() -> list[str]:
+    """The tradeable pool. Overridable so the list comes from the market/user,
+    not from us: PIT_UNIVERSE (comma list) or PIT_UNIVERSE_FILE (a file path)."""
+    raw = os.getenv("PIT_UNIVERSE")
+    if raw:
+        return [s.strip() for s in raw.split(",") if s.strip()]
+    path = os.getenv("PIT_UNIVERSE_FILE")
+    if path and os.path.exists(path):
+        with open(path) as f:
+            return [ln.strip() for ln in f
+                    if ln.strip() and not ln.startswith("#")]
+    return list(_BUILTIN_UNIVERSE)
+
+
+DEFAULT_UNIVERSE: list[str] = resolve_universe()
 
 
 @dataclass(frozen=True)
@@ -91,7 +122,7 @@ class ArenaConfig:
     # resolution to the next cascade rule instead of splitting hairs on noise.
     tie_epsilon_pct: float = _env_float("PIT_TIE_EPSILON_PCT", 0.01)
 
-    universe: list[str] = field(default_factory=lambda: list(DEFAULT_UNIVERSE))
+    universe: list[str] = field(default_factory=resolve_universe)
 
     def goal_pct_for(self, round_days: int) -> float:
         return round(self.goal_pct_per_day * round_days, 3)
