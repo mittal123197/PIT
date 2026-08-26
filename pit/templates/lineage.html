@@ -7,8 +7,9 @@
 <div style="display:flex;justify-content:space-between;align-items:flex-end;
   flex-wrap:wrap;gap:16px;margin-bottom:8px;">
   <div>
-    <div class="eyebrow">Lineage</div>
-    <h1 style="font-size:34px;">{{ lineage.name }}</h1>
+    <div class="sec" style="margin:0 0 4px;"><div class="eyebrow">Lineage</div></div>
+    <h1 style="font-size:34px;">
+      <span class="dot" style="background:{{ lineage.id|lcolor }};width:14px;height:14px;"></span>{{ lineage.name }}</h1>
   </div>
   <div style="text-align:right;">
     <div style="font-family:'Space Grotesk';font-weight:700;font-size:28px;">

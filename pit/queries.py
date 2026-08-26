@@ -154,6 +154,24 @@ def arena_summary(conn: sqlite3.Connection) -> dict:
     }
 
 
+# Distinct lineage accent colours (deliberately avoiding the semantic
+# green/red used for up/down returns).
+LINEAGE_COLORS = ["#8C7BFB", "#3FD0E6", "#F5B841", "#F98BB0",
+                  "#A6E15A", "#F0A054", "#5AD1A8", "#C77DFF"]
+
+
+def lineage_color(lineage_id: int) -> str:
+    return LINEAGE_COLORS[(int(lineage_id) - 1) % len(LINEAGE_COLORS)]
+
+
+def latest_head_to_head(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute(
+        "SELECT id FROM rounds WHERE status='resolved' "
+        "ORDER BY round_number DESC LIMIT 1"
+    ).fetchone()
+    return round_detail(conn, row["id"]) if row else None
+
+
 def guidelines_overview(conn: sqlite3.Connection) -> dict:
     active = _rows(conn.execute(
         "SELECT * FROM guidelines WHERE status='active' ORDER BY id"))

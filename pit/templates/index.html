@@ -1,62 +1,145 @@
 {% extends "base.html" %}
 {% block body %}
 
+<div class="hero">
+  <h1>Two AI agents. <span class="accent">Same money, same clock, no draws.</span></h1>
+  <p class="lead">Each round, two trading agents start with identical capital and
+    trade blind to each other's moves. The winner's stake grows; the loser is
+    retired and its next generation is rebuilt by <em>mutating the winner's own
+    trade log</em>. Survive, and the rounds only get shorter.</p>
+  <div class="howflow">
+    <div class="howstep s1"><div class="n">01</div>
+      <div class="t">Duel</div>
+      <div class="d">Both agents trade the same market, same deadline — seeing the
+        opponent's score but not their trades.</div></div>
+    <div class="howstep s2"><div class="n">02</div>
+      <div class="t">Resolve</div>
+      <div class="d">Higher return wins. Ties break on fewer trades, then lower
+        drawdown. Never a draw.</div></div>
+    <div class="howstep s3"><div class="n">03</div>
+      <div class="t">Evolve</div>
+      <div class="d">Winner +20% capital & ELO. Loser −20% and rebuilt from the
+        winner's playbook (mutated, not copied).</div></div>
+    <div class="howstep s4"><div class="n">04</div>
+      <div class="t">Repeat</div>
+      <div class="d">The pool can also vote shared rules into a "constitution."
+        Rounds shrink over time.</div></div>
+  </div>
+</div>
+
+<div class="sec"><div class="eyebrow">At a glance</div></div>
 <div class="cards">
-  <div class="stat"><div class="big">{{ summary.resolved_rounds }}</div>
-    <div class="lbl">Rounds resolved</div></div>
+  <div class="stat"><div class="big up">{{ summary.resolved_rounds }}</div>
+    <div class="lbl">Rounds played</div></div>
   <div class="stat"><div class="big">{{ summary.lineages }}</div>
-    <div class="lbl">Lineages</div></div>
-  <div class="stat"><div class="big">{{ summary.total_trades }}</div>
-    <div class="lbl">Total trades</div></div>
-  <div class="stat"><div class="big">{{ summary.last_round_days or '—' }}<span
-    style="font-size:13px;" class="muted">d</span></div>
+    <div class="lbl">Agents in the pool</div></div>
+  <div class="stat"><div class="big" style="color:var(--cyan);">{{ summary.total_trades }}</div>
+    <div class="lbl">Trades executed</div></div>
+  <div class="stat"><div class="big" style="color:var(--gold);">{{ summary.last_round_days or '—' }}<span
+    style="font-size:14px;" class="muted">d</span></div>
     <div class="lbl">Latest round length</div></div>
 </div>
 
-<div class="eyebrow">Standings — ranked by ELO</div>
+{% if h2h and h2h.result %}
+{% set a = h2h.states[0] %}{% set b = h2h.states[1] %}
+<div class="sec"><div class="eyebrow">Latest duel — round #{{ h2h.round.round_number }}</div>
+  <div class="subtitle">The most recent head-to-head and how it was decided.</div></div>
+<div class="h2h">
+  {% set a_win = h2h.result.winner_agent_id == a.agent_id %}
+  <div class="side {{ 'winner' if a_win }}">
+    {% if a_win %}<span class="crown">◆ winner</span>{% endif %}
+    <div class="name"><span class="dot" style="background:{{ a.lineage_id|lcolor }};"></span>{{ a.lineage }}</div>
+    <div class="ret {{ 'up' if a.final_return_pct >= 0 else 'down' }}">{{ a.final_return_pct|pct }}</div>
+    <div class="meta">gen {{ a.generation }} · {{ a.trade_count }} trades · {{ '%.1f'|format(a.max_drawdown_pct) }}% max dd</div>
+  </div>
+  <div class="center">
+    <span class="vs">VS</span>
+    <span class="reason">by {{ h2h.result.resolution_reason }}</span>
+  </div>
+  {% set b_win = h2h.result.winner_agent_id == b.agent_id %}
+  <div class="side right {{ 'winner' if b_win }}">
+    {% if b_win %}<span class="crown">◆ winner</span>{% endif %}
+    <div class="name">{{ b.lineage }}<span class="dot" style="background:{{ b.lineage_id|lcolor }};margin-left:8px;margin-right:0;"></span></div>
+    <div class="ret {{ 'up' if b.final_return_pct >= 0 else 'down' }}">{{ b.final_return_pct|pct }}</div>
+    <div class="meta">gen {{ b.generation }} · {{ b.trade_count }} trades · {{ '%.1f'|format(b.max_drawdown_pct) }}% max dd</div>
+  </div>
+</div>
+<div style="text-align:center;margin-top:10px;">
+  <a href="/round/{{ h2h.round.id }}" class="backlink">see this round's full trade ledger →</a>
+</div>
+{% endif %}
+
+<div class="sec"><div class="eyebrow">Standings</div>
+  <div class="subtitle">Ranked by ELO — beating a strong agent moves you more than
+    beating a weak one. Click a row for that lineage's evolution.</div></div>
+{% set max_stake = (board|map(attribute='current_stake')|max) or 1 %}
 <div class="panel">
   <table>
     <thead><tr>
-      <th>#</th><th>Lineage</th><th>Rating</th><th class="hide-sm">Trend</th>
-      <th>W–L</th><th>Gen</th><th class="hide-sm">Cumulative</th><th>Stake</th>
+      <th>#</th><th>Agent</th><th>ELO</th><th class="hide-sm">Trend</th>
+      <th class="hide-sm">Record</th><th>Gen</th><th class="hide-sm">Return</th>
+      <th>Capital</th>
     </tr></thead>
     <tbody>
     {% for r in board %}
+      {% set games = (r.wins + r.losses) or 1 %}
       <tr class="clickable" onclick="location='/lineage/{{ r.id }}'">
-        <td class="rank">{{ r.position }}</td>
-        <td class="agentname">{{ r.name }}</td>
-        <td class="mono">{{ '%.0f'|format(r.rating) }}</td>
+        <td class="rank r{{ r.position }}">{{ '◆' if r.position == 1 else r.position }}</td>
+        <td class="agentname"><span class="dot" style="background:{{ r.id|lcolor }};"></span>{{ r.name }}</td>
+        <td class="mono" style="font-weight:600;">{{ '%.0f'|format(r.rating) }}</td>
         <td class="hide-sm">{{ r.rating_timeline|spark }}</td>
-        <td class="mono">{{ r.wins }}–{{ r.losses }}</td>
+        <td class="hide-sm">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <div class="wl" title="{{ r.wins }} wins / {{ r.losses }} losses">
+              <span class="w" style="width:{{ (r.wins/games*100)|round }}%;"></span>
+              <span class="l" style="width:{{ (r.losses/games*100)|round }}%;"></span>
+            </div>
+            <span class="mono muted" style="font-size:11px;">{{ r.wins }}–{{ r.losses }}</span>
+          </div>
+        </td>
         <td class="mono">{{ r.generation }}</td>
-        <td class="hide-sm {{ 'up' if r.cumulative_return_pct >= 0 else 'down' }}">
+        <td class="hide-sm mono {{ 'up' if r.cumulative_return_pct >= 0 else 'down' }}">
           {{ r.cumulative_return_pct|pct }}</td>
-        <td class="mono">{{ r.current_stake|money }}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:9px;">
+            <div class="bar" title="stake relative to the field">
+              <span style="width:{{ (r.current_stake/max_stake*100)|round }}%;
+                background:{{ r.id|lcolor }};"></span></div>
+            <span class="mono" style="font-size:12px;">{{ r.current_stake|money }}</span>
+          </div>
+        </td>
       </tr>
     {% else %}
       <tr><td colspan="8" class="muted" style="padding:22px;">
-        No lineages yet — run <span class="mono">pit.cli init</span> then
+        No agents yet — run <span class="mono">pit.cli init</span> then
         <span class="mono">pit.cli arena</span>.</td></tr>
     {% endfor %}
     </tbody>
   </table>
 </div>
+<div class="legend">
+  <span><i style="background:var(--alpha);"></i> wins</span>
+  <span><i style="background:var(--liq);"></i> losses</span>
+  <span><i style="background:var(--violet);"></i> ELO trend (sparkline)</span>
+  <span><i style="background:var(--cyan);"></i> capital bar = stake vs. the field</span>
+</div>
 
-<div class="eyebrow">The constitution — shared guidelines, changed only by vote</div>
+<div class="sec"><div class="eyebrow">The constitution</div>
+  <div class="subtitle">Shared rules the agents can vote into force. A reflection
+    pass proposes one when a pattern keeps recurring; a strict majority adopts it.</div></div>
 <div class="panel">
   <div style="padding:16px 20px;">
     {% if constitution.active %}
       {% for gl in constitution.active %}
-        <div style="display:flex;gap:12px;align-items:baseline;padding:8px 0;
-          {% if not loop.last %}border-bottom:1px solid var(--line);{% endif %}">
-          <span class="pill win">v{{ gl.version }}</span>
+        <div style="display:flex;gap:12px;align-items:baseline;padding:9px 0;
+          {% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
+          <span class="pill gold">✓ v{{ gl.version }}</span>
           <span style="font-size:13.5px;">{{ gl.text }}</span>
         </div>
       {% endfor %}
     {% else %}
       <p class="muted" style="font-size:13px;margin:0;">
-        No guidelines adopted yet — a reflection pass proposes one when a pattern
-        recurs, and the pool votes (strict majority carries it).</p>
+        No rules adopted yet — the pool proposes and votes as patterns emerge.</p>
     {% endif %}
   </div>
   {% if constitution.proposals %}
@@ -69,8 +152,8 @@
         <td><span class="pill status">{{ p.kind }}</span></td>
         <td class="mono">{{ p.agree or 0 }}/{{ p.total or 0 }}</td>
         <td>
-          {% if p.resolution == 'accepted' %}<span class="pill win">adopted</span>
-          {% elif p.resolution == 'rejected' %}<span class="pill lose">rejected</span>
+          {% if p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>
+          {% elif p.resolution == 'rejected' %}<span class="pill lose">✕ rejected</span>
           {% else %}<span class="pill status">open</span>{% endif %}
         </td>
       </tr>
@@ -80,28 +163,23 @@
   {% endif %}
 </div>
 
-<div class="eyebrow">Recent rounds</div>
+<div class="sec"><div class="eyebrow">Recent rounds</div>
+  <div class="subtitle">Every duel, newest first. Click through for the trades.</div></div>
 <div class="panel">
   <table>
     <thead><tr>
-      <th>Round</th><th class="hide-sm">Length</th><th>Result</th>
-      <th>Winner</th><th class="hide-sm">Returns</th><th>ELO Δ</th>
+      <th>Round</th><th class="hide-sm">Length</th><th>Winner</th>
+      <th class="hide-sm">Returns</th><th>Decided by</th><th>ELO Δ</th>
     </tr></thead>
     <tbody>
     {% for r in rounds %}
       <tr class="clickable" onclick="location='/round/{{ r.id }}'">
-        <td class="mono">#{{ r.round_number }}</td>
-        <td class="mono hide-sm">{{ r.length_days }}d</td>
-        <td>
-          {% if r.status == 'resolved' %}
-            <span class="pill reason">{{ r.resolution_reason }}</span>
-          {% else %}
-            <span class="pill status">running</span>
-          {% endif %}
-        </td>
+        <td class="mono muted">#{{ r.round_number }}</td>
+        <td class="mono hide-sm muted">{{ r.length_days }}d</td>
         <td>
           {% if r.winner %}<span class="agentname up">{{ r.winner }}</span>
-            <span class="muted"> beat </span>{{ r.loser }}{% else %}—{% endif %}
+            <span class="muted" style="font-size:12px;"> beat {{ r.loser }}</span>
+          {% else %}<span class="pill status">running</span>{% endif %}
         </td>
         <td class="mono hide-sm">
           {% if r.winner_return_pct is not none %}
@@ -110,7 +188,8 @@
             <span class="down">{{ r.loser_return_pct|pct }}</span>
           {% else %}—{% endif %}
         </td>
-        <td class="mono">{% if r.rating_delta is not none %}+{{ '%.1f'|format(r.rating_delta) }}{% else %}—{% endif %}</td>
+        <td>{% if r.resolution_reason %}<span class="pill reason">{{ r.resolution_reason }}</span>{% else %}—{% endif %}</td>
+        <td class="mono up">{% if r.rating_delta is not none %}+{{ '%.1f'|format(r.rating_delta) }}{% else %}—{% endif %}</td>
       </tr>
     {% else %}
       <tr><td colspan="6" class="muted" style="padding:22px;">No rounds yet.</td></tr>

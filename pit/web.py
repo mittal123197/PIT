@@ -44,6 +44,11 @@ def _spark(values) -> Markup:
     return Markup(q.sparkline(values or []))
 
 
+@app.template_filter("lcolor")
+def _lcolor(lineage_id) -> str:
+    return q.lineage_color(lineage_id)
+
+
 @app.route("/")
 def index():
     conn = _conn()
@@ -53,6 +58,7 @@ def index():
         board=q.leaderboard(conn),
         rounds=q.recent_rounds(conn),
         constitution=q.guidelines_overview(conn),
+        h2h=q.latest_head_to_head(conn),
     )
 
 

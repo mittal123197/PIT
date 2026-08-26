@@ -13,7 +13,7 @@
     <div class="panel" style="margin-bottom:0;
       border-color:{{ 'var(--alpha)' if won else 'var(--line)' }};">
       <h2 style="display:flex;justify-content:space-between;align-items:center;">
-        <a href="/lineage/{{ s.lineage_id }}"><span class="agentname">{{ s.lineage }}</span></a>
+        <a href="/lineage/{{ s.lineage_id }}"><span class="agentname"><span class="dot" style="background:{{ s.lineage_id|lcolor }};"></span>{{ s.lineage }}</span></a>
         {% if won %}<span class="pill win">winner</span>
         {% elif result %}<span class="pill lose">loser</span>{% endif %}
       </h2>
