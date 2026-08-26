@@ -122,8 +122,12 @@ class Engine:
     # ---- running a round ----------------------------------------------
 
     def run_round(
-        self, lineage_a_id: int, lineage_b_id: int, feed: PriceFeed | None = None
+        self, lineage_a_id: int, lineage_b_id: int,
+        feed: PriceFeed | None = None, feed_factory=None,
     ) -> RoundOutcome:
+        """Run one duel. `feed_factory(length_days) -> PriceFeed` lets the caller
+        build a feed sized to the (only-now-known) round length; an explicit
+        `feed` overrides it (used by tests)."""
         la = self._lineage(lineage_a_id)
         lb = self._lineage(lineage_b_id)
         agent_a = self._agent(la["current_agent_id"])
@@ -132,7 +136,12 @@ class Engine:
         round_number = self._next_round_number()
         length_days = self._length_for(round_number)
         goal_pct = self.config.goal_pct_for(length_days)
-        feed = feed or SyntheticFeed(self.config.universe, seed=1000 + round_number)
+        if feed is None:
+            feed = (feed_factory(length_days) if feed_factory
+                    else SyntheticFeed(
+                        self.config.universe, seed=1000 + round_number,
+                        bars=self.config.bars_for_days(length_days),
+                        bar_minutes=self.config.bar_minutes))
 
         start_ts = feed.now().isoformat()
         deadline_ts = feed._timestamps[-1].isoformat() if hasattr(feed, "_timestamps") else start_ts

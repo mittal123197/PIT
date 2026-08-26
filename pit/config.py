@@ -48,6 +48,19 @@ class ArenaConfig:
     # cascade, not by the goal. Scales with round length.
     goal_pct_per_day: float = _env_float("PIT_GOAL_PCT_PER_DAY", 0.15)
 
+    # --- how a "day" maps to price bars (so round length is real) ---
+    # NSE trades ~375 minutes/day; at 15-min bars that's 25 bars per day. A
+    # round of `length_days` therefore replays length_days * bars_per_day bars,
+    # so a 4-day round genuinely simulates less market than a 7-day one.
+    bar_minutes: int = _env_int("PIT_BAR_MINUTES", 15)
+    market_minutes_per_day: int = _env_int("PIT_MARKET_MINUTES", 375)
+
+    def bars_per_day(self) -> int:
+        return max(1, self.market_minutes_per_day // self.bar_minutes)
+
+    def bars_for_days(self, length_days: int) -> int:
+        return max(2, length_days * self.bars_per_day())
+
     # --- rating ---
     elo_k: float = _env_float("PIT_ELO_K", 32.0)
     elo_base: float = _env_float("PIT_ELO_BASE", 1000.0)

@@ -45,16 +45,21 @@ def _engine(conn, use_llm: bool) -> Engine:
                   mutate_fn=mutate_with_llm, use_llm=use_llm)
 
 
-def _make_feed(kind: str, round_number: int, bars: int | None = None):
-    if kind == "historical":
-        try:
-            return HistoricalFeed(DEFAULT.universe)
-        except Exception as exc:
-            print(f"  historical feed unavailable ({exc}); falling back to synthetic")
-    kwargs = {"seed": 1000 + round_number}
-    if bars:
-        kwargs["bars"] = bars
-    return SyntheticFeed(DEFAULT.universe, **kwargs)
+def _feed_factory(kind: str, round_number: int, bars_override: int | None = None):
+    """Return a callable `(length_days) -> PriceFeed`, sized to the round.
+
+    `--bars` overrides the day-based sizing (handy to keep LLM runs short).
+    """
+    def make(length_days: int):
+        bars = bars_override or DEFAULT.bars_for_days(length_days)
+        if kind == "historical":
+            try:
+                return HistoricalFeed(DEFAULT.universe, bars=bars)
+            except Exception as exc:
+                print(f"  historical feed unavailable ({exc}); using synthetic")
+        return SyntheticFeed(DEFAULT.universe, seed=1000 + round_number,
+                             bars=bars, bar_minutes=DEFAULT.bar_minutes)
+    return make
 
 
 def _lineage_ids(conn) -> list[int]:
@@ -90,8 +95,8 @@ def cmd_run_round(args):
     if len(ids) < 2:
         print("Need at least 2 lineages. Run `init` first.")
         return
-    feed = _make_feed(args.feed, eng._next_round_number(), args.bars)
-    out = eng.run_round(ids[0], ids[1], feed=feed)
+    factory = _feed_factory(args.feed, eng._next_round_number(), args.bars)
+    out = eng.run_round(ids[0], ids[1], feed_factory=factory)
     _print_outcome(out)
     _print_reflection(eng.last_reflection)
 
@@ -106,8 +111,8 @@ def cmd_arena(args):
         print("Need at least 2 lineages. Run `init` first.")
         return
     for _ in range(args.rounds):
-        feed = _make_feed(args.feed, eng._next_round_number(), args.bars)
-        out = eng.run_round(ids[0], ids[1], feed=feed)
+        factory = _feed_factory(args.feed, eng._next_round_number(), args.bars)
+        out = eng.run_round(ids[0], ids[1], feed_factory=factory)
         _print_outcome(out)
         _print_reflection(eng.last_reflection)
     print()

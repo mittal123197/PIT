@@ -52,7 +52,11 @@ class SyntheticFeed(PriceFeed):
         bar_minutes: int = 15,
         seed: int = 42,
         annual_drift: float = 0.08,
-        annual_vol: float = 0.30,
+        # Higher than a real index on purpose: enough intra-round movement that
+        # both momentum and mean-reversion strategies actually trigger even in a
+        # short (few-day) round, so duels stay lively instead of collapsing to
+        # 0-trade ties. Tunable per feed.
+        annual_vol: float = 0.55,
         start_price_range: tuple[float, float] = (500.0, 3500.0),
     ) -> None:
         self.symbols = list(symbols or DEFAULT_UNIVERSE)
@@ -110,6 +114,7 @@ class HistoricalFeed(PriceFeed):
         period: str = "1mo",
         interval: str = "15m",
         cache_dir: str | None = None,
+        bars: int | None = None,
     ) -> None:
         self.symbols = list(symbols or DEFAULT_UNIVERSE)
         self.period = period
@@ -119,6 +124,10 @@ class HistoricalFeed(PriceFeed):
         )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._timestamps, self._paths = self._load()
+        # keep only the last `bars` bars, so a round can span a real N-day window
+        if bars and len(self._timestamps) > bars:
+            self._timestamps = self._timestamps[-bars:]
+            self._paths = {s: v[-bars:] for s, v in self._paths.items()}
         self._cursor = 0
 
     def _load(self):

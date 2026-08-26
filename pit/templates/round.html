@@ -29,8 +29,11 @@
               <td class="mono" style="padding:6px 0;border:none;text-align:right;">{{ s.trade_count }}</td></tr>
           <tr><td class="muted" style="padding:6px 0;border:none;">Max drawdown</td>
               <td class="mono down" style="padding:6px 0;border:none;text-align:right;">{{ '%.2f'|format(s.max_drawdown_pct) }}%</td></tr>
-          <tr><td class="muted" style="padding:6px 0;border:none;">Start capital</td>
+          <tr><td class="muted" style="padding:6px 0;border:none;">Capital given</td>
               <td class="mono" style="padding:6px 0;border:none;text-align:right;">{{ s.starting_capital|money }}</td></tr>
+          <tr><td class="muted" style="padding:6px 0;border:none;">Ending value</td>
+              <td class="mono {{ 'up' if s.final_return_pct is not none and s.final_return_pct >= 0 else 'down' }}"
+                  style="padding:6px 0;border:none;text-align:right;">{{ (s.starting_capital*(1+(s.final_return_pct or 0)/100))|money }}</td></tr>
           <tr><td class="muted" style="padding:6px 0;border:none;">Status</td>
               <td style="padding:6px 0;border:none;text-align:right;">
                 <span class="pill status">{{ s.status }}</span></td></tr>

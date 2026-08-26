@@ -63,12 +63,13 @@ def run_forever() -> None:
     while True:
         from .feeds import SyntheticFeed
         n = eng._next_round_number()
-        feed_kwargs = {"seed": 1000 + n}
-        if bars:
-            feed_kwargs["bars"] = bars
+
+        def factory(length_days, _n=n):
+            b = bars or DEFAULT.bars_for_days(length_days)
+            return SyntheticFeed(DEFAULT.universe, seed=1000 + _n, bars=b,
+                                 bar_minutes=DEFAULT.bar_minutes)
         try:
-            out = eng.run_round(ids[0], ids[1], feed=SyntheticFeed(
-                DEFAULT.universe, **feed_kwargs))
+            out = eng.run_round(ids[0], ids[1], feed_factory=factory)
             print(f"[daemon] round {out.round_number}: {out.winner_lineage} "
                   f"beat {out.loser_lineage} ({out.reason})", flush=True)
         except Exception as exc:  # never let one bad round kill the loop

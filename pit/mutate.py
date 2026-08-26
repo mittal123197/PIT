@@ -63,12 +63,14 @@ def mutate_config(
     trade_ct = len(winner_trades)
     hb = int(new.get("heartbeat_minutes", loser_cfg.get("heartbeat_minutes", 60)))
     if trade_ct >= 6:
-        hb = max(15, int(hb * 0.75))
-        notes.append(f"winner traded {trade_ct}x -> tightening cadence to {hb}m")
+        hb = int(hb * 0.75)
+        notes.append(f"winner traded {trade_ct}x -> tightening cadence")
     elif trade_ct <= 1:
         hb = int(hb * 1.5)
-        notes.append(f"winner traded {trade_ct}x -> relaxing cadence to {hb}m")
-    new["heartbeat_minutes"] = hb
+        notes.append(f"winner traded {trade_ct}x -> relaxing cadence")
+    # keep cadence in a sane band so it can't run away to hundreds of minutes
+    # (which would silently stop the agent from ever acting)
+    new["heartbeat_minutes"] = max(15, min(240, hb))
 
     if not notes:
         notes.append("perturbed parameters toward winner")

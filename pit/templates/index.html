@@ -50,6 +50,7 @@
     {% if a_win %}<span class="crown">◆ winner</span>{% endif %}
     <div class="name"><span class="dot" style="background:{{ a.lineage_id|lcolor }};"></span>{{ a.lineage }}</div>
     <div class="ret {{ 'up' if a.final_return_pct >= 0 else 'down' }}">{{ a.final_return_pct|pct }}</div>
+    <div class="meta">{{ a.starting_capital|money }} given → {{ (a.starting_capital*(1+a.final_return_pct/100))|money }}</div>
     <div class="meta">gen {{ a.generation }} · {{ a.trade_count }} trades · {{ '%.1f'|format(a.max_drawdown_pct) }}% max dd</div>
   </div>
   <div class="center">
@@ -61,6 +62,7 @@
     {% if b_win %}<span class="crown">◆ winner</span>{% endif %}
     <div class="name">{{ b.lineage }}<span class="dot" style="background:{{ b.lineage_id|lcolor }};margin-left:8px;margin-right:0;"></span></div>
     <div class="ret {{ 'up' if b.final_return_pct >= 0 else 'down' }}">{{ b.final_return_pct|pct }}</div>
+    <div class="meta">{{ b.starting_capital|money }} given → {{ (b.starting_capital*(1+b.final_return_pct/100))|money }}</div>
     <div class="meta">gen {{ b.generation }} · {{ b.trade_count }} trades · {{ '%.1f'|format(b.max_drawdown_pct) }}% max dd</div>
   </div>
 </div>
