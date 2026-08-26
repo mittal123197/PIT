@@ -164,6 +164,18 @@ def lineage_color(lineage_id: int) -> str:
     return LINEAGE_COLORS[(int(lineage_id) - 1) % len(LINEAGE_COLORS)]
 
 
+def live_status(conn: sqlite3.Connection) -> dict | None:
+    r = conn.execute("SELECT * FROM rounds WHERE status='live' "
+                     "ORDER BY id DESC LIMIT 1").fetchone()
+    if not r:
+        return None
+    done = conn.execute("SELECT COUNT(*) n FROM live_days WHERE round_id=?",
+                        (r["id"],)).fetchone()["n"]
+    return {"round_id": r["id"], "round_number": r["round_number"],
+            "days_done": done, "length_days": r["length_days"],
+            "goal_pct": r["goal_pct"]}
+
+
 def latest_head_to_head(conn: sqlite3.Connection) -> dict | None:
     row = conn.execute(
         "SELECT id FROM rounds WHERE status='resolved' "

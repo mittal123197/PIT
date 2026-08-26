@@ -59,6 +59,7 @@ def index():
         rounds=q.recent_rounds(conn),
         constitution=q.guidelines_overview(conn),
         h2h=q.latest_head_to_head(conn),
+        live=q.live_status(conn),
     )
 
 

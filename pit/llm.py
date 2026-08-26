@@ -33,6 +33,14 @@ def _client():
 DEFAULT_MODEL = os.getenv("PIT_LLM_MODEL", "openai/gpt-oss-20b")
 
 
+def _extra_for(model: str) -> dict:
+    """gpt-oss models support a reasoning_effort knob; low keeps latency down on
+    the many calls an agent makes per round."""
+    if "gpt-oss" in model:
+        return {"reasoning_effort": os.getenv("PIT_LLM_REASONING", "low")}
+    return {}
+
+
 # Whether agents are told the evolutionary stakes. Toggle to run the same
 # arena with "aware" vs "blind" agents and compare — it can cut both ways
 # (sharper play, or meta-gaming the win condition). Set PIT_AGENT_AWARE=0 to
@@ -78,11 +86,7 @@ class LLMPolicy(AgentPolicy):
         self.model = model
 
     def _extra(self) -> dict:
-        # gpt-oss models support a reasoning_effort knob; low keeps the hot
-        # decision path fast enough to run many wakes per round.
-        if "gpt-oss" in self.model:
-            return {"reasoning_effort": os.getenv("PIT_LLM_REASONING", "low")}
-        return {}
+        return _extra_for(self.model)
 
     @staticmethod
     def _market_scan(ctx: AgentContext) -> list[dict]:

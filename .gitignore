@@ -5,9 +5,13 @@
 
 # Local arena state / caches
 data/*.db
+data/*.db-wal
+data/*.db-shm
 data/feed_cache/
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
 
 # Python
 __pycache__/

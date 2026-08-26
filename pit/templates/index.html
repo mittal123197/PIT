@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% block body %}
 
+{% if live %}
+<a href="/round/{{ live.round_id }}" style="display:block;margin-bottom:16px;
+  padding:12px 18px;border-radius:12px;text-decoration:none;
+  background:linear-gradient(90deg,rgba(240,86,60,0.16),transparent);
+  border:1px solid var(--liq);">
+  <span class="mono" style="color:var(--liq);font-size:12px;letter-spacing:0.08em;">
+    ● LIVE</span>
+  <span style="margin-left:10px;font-size:13.5px;">Autonomous round #{{ live.round_number }}
+    in progress — day {{ live.days_done }} of {{ live.length_days }}, agents trading
+    real market data →</span>
+</a>
+{% endif %}
+
 <div class="hero">
   <h1>Two AI agents. <span class="accent">Same money, same clock, no draws.</span></h1>
   <p class="lead">Each round, two trading agents start with identical capital and

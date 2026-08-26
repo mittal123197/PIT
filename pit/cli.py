@@ -119,6 +119,59 @@ def cmd_arena(args):
     _print_leaderboard(conn)
 
 
+def cmd_forward_start(args):
+    from . import forward
+    conn = dbm.connect()
+    dbm.init_db(conn)
+    try:
+        rid = forward.start_round(conn, days=args.days)
+    except RuntimeError as exc:
+        print(f"  {exc}")
+        return
+    st = forward.status(conn)
+    print(f"Live round #{st['round_number']} started — {st['length_days']} "
+          f"trading days, goal {st['goal_pct']}%, two autonomous agents from ₹"
+          f"{DEFAULT.base_capital:,.0f} paper each.")
+    print("  Run `pit forward-step` once per day after the NSE close (~15:30 IST).")
+
+
+def cmd_forward_step(args):
+    from . import forward
+    from .llm import groq_available
+    if not groq_available():
+        print("  Autonomous agents need Groq. Set GROQ_API_KEY (and PIT_USE_LLM is\n"
+              "  not required for forward mode).")
+        return
+    conn = dbm.connect()
+    dbm.init_db(conn)
+    print("Stepping the live round (agents researching real market)...")
+    res = forward.step_round(conn, trade_date=args.date)
+    status = res.get("status")
+    if status in ("no_active_round", "already_processed", "not_a_trading_day"):
+        print(f"  {status.replace('_', ' ')}" + (f" ({res.get('date')})" if res.get('date') else ""))
+        return
+    if status == "resolved":
+        o = res["outcome"]
+        print(f"\n  Day {res['day']} — ROUND RESOLVED")
+        print(f"  WINNER {o['winner']} {o['winner_return']:+.2f}%  "
+              f"beat {o['loser']} {o['loser_return']:+.2f}% ({o['reason']})")
+        print(f"  mutation → {o['loser']}: {o['mutation_note']}")
+    else:
+        print(f"\n  Day {res['day']} of {res['of']} processed ({res['date']}).")
+
+
+def cmd_forward_status(args):
+    from . import forward
+    conn = dbm.connect()
+    dbm.init_db(conn)
+    st = forward.status(conn)
+    if not st:
+        print("No live round in progress. Start one with `pit forward-start`.")
+        return
+    print(f"Live round #{st['round_number']}: day {st['days_done']}/"
+          f"{st['length_days']}, goal {st['goal_pct']}%, started {st['started']}.")
+
+
 def cmd_guidelines(args):
     from . import guidelines as gmod
     conn = dbm.connect()
@@ -256,6 +309,17 @@ def main(argv=None):
 
     pg = sub.add_parser("guidelines", help="show the pool's shared guidelines")
     pg.set_defaults(func=cmd_guidelines)
+
+    fs = sub.add_parser("forward-start", help="begin a live forward paper round")
+    fs.add_argument("--days", type=int, help="trading days (default: config)")
+    fs.set_defaults(func=cmd_forward_start)
+
+    fp = sub.add_parser("forward-step", help="run one real trading day (autonomous agents)")
+    fp.add_argument("--date", help="override the trade date (YYYY-MM-DD)")
+    fp.set_defaults(func=cmd_forward_step)
+
+    fst = sub.add_parser("forward-status", help="show the live round's progress")
+    fst.set_defaults(func=cmd_forward_status)
 
     ph = sub.add_parser("history", help="show round results / trades")
     ph.add_argument("--round", type=int, help="show trades for this round id")

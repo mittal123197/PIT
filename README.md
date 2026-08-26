@@ -50,6 +50,25 @@ python3 -m pit.web            # http://127.0.0.1:5001
 
 It never writes, so it's safe to run against a live DB while the arena plays.
 
+### Autonomous forward trading (live, real data)
+
+Two fully **autonomous** agents — no stock pool, no preset strategy. Each is an
+LLM given paper capital and a goal; it researches the real NSE market itself
+(today's movers + the price history of any ticker it names) and trades over real
+calendar days. Paper money only — no real orders anywhere.
+
+```bash
+export GROQ_API_KEY=gsk_...            # autonomous agents need Groq
+python3 -m pit.cli forward-start --days 7      # open a 7-trading-day duel
+python3 -m pit.cli forward-step                # run ONE day (after ~15:30 IST close)
+python3 -m pit.cli forward-status              # progress
+```
+
+Run `forward-step` once per trading day (by hand, or a daily cron/launchd job).
+After the last day it resolves with the same cascade + stakes + ELO + mutation.
+Because each agent picks any ticker, a renamed/delisted symbol simply returns no
+data and the agent moves on.
+
 ### Always-on (local or deployed)
 
 Run the arena loop + dashboard in one process (a new round every

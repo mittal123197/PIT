@@ -144,6 +144,16 @@ CREATE TABLE IF NOT EXISTS guideline_votes (
     UNIQUE (proposal_id, lineage_id)
 );
 
+-- Which real trading days a live (forward) round has already processed, so a
+-- daily step is idempotent and the round advances one real day at a time.
+CREATE TABLE IF NOT EXISTS live_days (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id     INTEGER NOT NULL REFERENCES rounds(id),
+    trade_date   TEXT NOT NULL,
+    processed_at TEXT NOT NULL,
+    UNIQUE (round_id, trade_date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_trades_round_agent ON trades(round_id, agent_id);
 CREATE INDEX IF NOT EXISTS idx_watches_round_active ON price_watches(round_id, active);
 CREATE INDEX IF NOT EXISTS idx_agents_lineage ON agents(lineage_id);

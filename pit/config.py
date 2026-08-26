@@ -50,7 +50,7 @@ _BUILTIN_UNIVERSE: list[str] = [
     # small / newer listings
     "PAYTM.NS", "NYKAA.NS", "POLICYBZR.NS", "IEX.NS", "CDSL.NS",
     "BSE.NS", "ANGELONE.NS", "KPITTECH.NS", "TATAELXSI.NS", "SUZLON.NS",
-    "IRFC.NS", "YESBANK.NS", "IDEA.NS", "ZEEL.NS", "RVNL.NS",
+    "IRFC.NS", "YESBANK.NS", "IDEA.NS", "ETERNAL.NS", "RVNL.NS",
 ]
 
 
