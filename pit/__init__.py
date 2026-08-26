@@ -11,3 +11,11 @@ upgrade in place to Groq-driven agents and real historical/broker data.
 """
 
 __version__ = "0.1.0"
+
+# Load local .env early so GROQ_API_KEY etc. are available no matter which
+# submodule is imported first.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except Exception:  # pragma: no cover
+    pass
