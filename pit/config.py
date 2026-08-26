@@ -23,35 +23,39 @@ def _env_int(name: str, default: int) -> int:
 
 # The watchlist the agents may trade in Phase 1. NSE tickers (yfinance uses the
 # `.NS` suffix); the synthetic feed just treats them as opaque symbol names.
-# The candidate MARKET the agents research and pick from — deliberately spanning
-# large, mid and small caps so there's NO cap bias baked in by us. The agents
-# choose which of these to trade; nothing here is a recommendation.
-#
-# This built-in list is just a starting pool. To hand the agents the entire
-# market instead, set PIT_UNIVERSE="TICK1.NS,TICK2.NS,..." or point
-# PIT_UNIVERSE_FILE at a newline-separated list (e.g. the full NSE equity list).
-# The historical feed drops any ticker that doesn't return data, so an
-# over-broad list is safe.
-_BUILTIN_UNIVERSE: list[str] = [
-    # large cap
+# Which market the arena trades. The autonomous agents pick any ticker they
+# want; the lists below are ONLY a "what's moving" discovery reference (spanning
+# caps so no bias is baked in) and a default pool for the offline replay engine.
+MARKET: str = os.getenv("PIT_MARKET", "us").lower()
+
+_US_UNIVERSE: list[str] = [
+    # mega / large cap
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AVGO", "AMD",
+    "NFLX", "ADBE", "CRM", "ORCL", "INTC", "QCOM", "CSCO", "MU", "TXN",
+    "JPM", "BAC", "WMT", "DIS", "BA", "XOM", "PYPL", "COST", "PEP", "KO",
+    # higher-volatility growth / momentum / meme
+    "COIN", "PLTR", "MSTR", "SMCI", "ARM", "SOFI", "HOOD", "RIVN", "LCID",
+    "MARA", "RIOT", "AFRM", "SNAP", "UBER", "ABNB", "SHOP", "ROKU", "DKNG",
+    "GME", "AMC", "NIO", "F", "CCL", "CVNA", "DELL", "MRVL", "PANW", "NOW",
+]
+
+_NSE_UNIVERSE: list[str] = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS",
     "HINDUNILVR.NS", "ITC.NS", "SBIN.NS", "BHARTIARTL.NS", "KOTAKBANK.NS",
-    "LT.NS", "BAJFINANCE.NS", "AXISBANK.NS", "ASIANPAINT.NS", "MARUTI.NS",
-    "HCLTECH.NS", "SUNPHARMA.NS", "TITAN.NS", "ULTRACEMCO.NS", "WIPRO.NS",
-    "NTPC.NS", "POWERGRID.NS", "M&M.NS", "TATAMOTORS.NS", "TATASTEEL.NS",
-    "JSWSTEEL.NS", "ADANIENT.NS", "ADANIPORTS.NS", "COALINDIA.NS", "ONGC.NS",
-    # mid cap
-    "DIXON.NS", "PERSISTENT.NS", "COFORGE.NS", "POLYCAB.NS", "ASTRAL.NS",
-    "PAGEIND.NS", "MPHASIS.NS", "AUBANK.NS", "FEDERALBNK.NS", "IDFCFIRSTB.NS",
-    "INDHOTEL.NS", "TVSMOTOR.NS", "ASHOKLEY.NS", "BHARATFORG.NS", "CUMMINSIND.NS",
-    "HAVELLS.NS", "GODREJCP.NS", "MARICO.NS", "PIDILITIND.NS", "TATAPOWER.NS",
-    "GAIL.NS", "VEDL.NS", "SAIL.NS", "PFC.NS", "RECLTD.NS",
-    "IRCTC.NS", "DMART.NS", "TRENT.NS", "LTIM.NS", "APOLLOHOSP.NS",
-    # small / newer listings
-    "PAYTM.NS", "NYKAA.NS", "POLICYBZR.NS", "IEX.NS", "CDSL.NS",
-    "BSE.NS", "ANGELONE.NS", "KPITTECH.NS", "TATAELXSI.NS", "SUZLON.NS",
-    "IRFC.NS", "YESBANK.NS", "IDEA.NS", "ETERNAL.NS", "RVNL.NS",
+    "LT.NS", "BAJFINANCE.NS", "AXISBANK.NS", "MARUTI.NS", "HCLTECH.NS",
+    "SUNPHARMA.NS", "TITAN.NS", "WIPRO.NS", "TATAMOTORS.NS", "TATASTEEL.NS",
+    "JSWSTEEL.NS", "ADANIENT.NS", "COALINDIA.NS", "ONGC.NS", "DIXON.NS",
+    "PERSISTENT.NS", "COFORGE.NS", "TATAPOWER.NS", "VEDL.NS", "SAIL.NS",
+    "IRFC.NS", "SUZLON.NS", "RVNL.NS", "ETERNAL.NS", "TRENT.NS",
 ]
+
+
+def market_reference() -> list[str]:
+    return _US_UNIVERSE if MARKET == "us" else _NSE_UNIVERSE
+
+
+# kept for imports; the movers feed and offline engine use this.
+_BUILTIN_UNIVERSE: list[str] = market_reference()
 
 
 def resolve_universe() -> list[str]:
@@ -65,7 +69,7 @@ def resolve_universe() -> list[str]:
         with open(path) as f:
             return [ln.strip() for ln in f
                     if ln.strip() and not ln.startswith("#")]
-    return list(_BUILTIN_UNIVERSE)
+    return list(market_reference())
 
 
 DEFAULT_UNIVERSE: list[str] = resolve_universe()

@@ -14,17 +14,22 @@ import json
 import os
 
 from . import market
+from .config import MARKET
 from .llm import AGENT_AWARE, DEFAULT_MODEL, _client, _extra_for, groq_available
 
 MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "2"))
 
-_SYSTEM = """You are an autonomous trader in a head-to-head duel against one \
+_MARKET_NAME = "US stock" if MARKET == "us" else "Indian (NSE)"
+_TICKER_HINT = ("US-listed tickers (e.g. AAPL, TSLA, NVDA, COIN)"
+                if MARKET == "us" else "NSE tickers (suffix .NS)")
+
+_SYSTEM = f"""You are an autonomous trader in a head-to-head duel against one \
 rival. You each started the round with the SAME paper capital and have a fixed \
 number of trading days. Whoever has the higher return at the deadline wins.
 
 You have NO preset list of stocks and NO fixed strategy — you decide everything, \
 like a human trader starting from scratch. Find opportunities yourself: you know \
-the Indian (NSE) market; you can also look at today's biggest movers. Research \
+the {_MARKET_NAME} market; you can also look at today's biggest movers. Research \
 any ticker before trading it.
 
 Hard rule: a stop-loss will liquidate you if your book falls too far — manage \
@@ -43,9 +48,9 @@ Respond ONLY with JSON of this shape:
   "notes": "carry-forward notes to your future self"
 }
 Set done=false and fill "research" to gather data first (you'll be called again \
-with the results). Set done=true with your "orders" to act. Only NSE tickers \
-(suffix .NS). Buy only within your cash; sell only what you hold. You may also \
-give "qty" (whole shares) instead of amount_inr."""
+with the results). Set done=true with your "orders" to act. Only """ + _TICKER_HINT + """. \
+Buy only within your cash; sell only what you hold. Amounts are in your account \
+currency. You may also give "qty" (whole shares) instead of amount_inr."""
 
 
 def decide(view: dict, day: int, total_days: int, goal_pct: float,
