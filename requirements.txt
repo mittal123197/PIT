@@ -1,0 +1,15 @@
+# Core arena runs on the stdlib alone (sqlite3, dataclasses).
+# These are only needed for the optional paths:
+
+# Historical NSE replay (--feed historical)
+yfinance>=0.2.40
+pandas>=2.0
+
+# LLM agents + LLM mutation (PIT_USE_LLM=1, needs GROQ_API_KEY)
+groq>=0.11
+
+# Loads .env in local dev
+python-dotenv>=1.0
+
+# Tests
+pytest>=8.0
