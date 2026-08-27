@@ -9,6 +9,7 @@ updates while you watch. Paper money only — no real orders.
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime
 
@@ -28,35 +29,72 @@ def _price_fn():
     return price
 
 
-def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 120,
-             interval: int = 180, verbose: bool = True) -> dict:
+def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
+             interval: int = 900, refresh: int | None = None,
+             verbose: bool = True) -> dict:
+    """LLM *decisions* every `interval`s; cheap price/P&L *marks* every
+    `refresh`s so the scoreboard moves continuously between decisions."""
+    refresh = refresh or int(os.getenv("PIT_MARK_REFRESH", "120"))
     rnd = forward._active_round(conn)
     if not rnd:
         forward.start_round(conn, config, days=10_000)  # time-based; no day-resolve
         rnd = forward._active_round(conn)
     if verbose:
-        print(f"● LIVE — {MARKET.upper()} market, {minutes} min, a tick every "
-              f"{interval}s. Two autonomous agents, {CURRENCY}"
-              f"{config.base_capital:,.0f} paper each. Watch /live.\n", flush=True)
+        print(f"● LIVE — {MARKET.upper()} market, {minutes} min. Decisions every "
+              f"{interval // 60} min, prices marked every {refresh}s. "
+              f"{CURRENCY}{config.base_capital:,.0f} paper each. Watch /live.\n",
+              flush=True)
 
     end = time.time() + minutes * 60
-    tick = 0
+    decision = 0
+    decision_due = 0.0  # force a decision immediately
     while time.time() < end:
-        tick += 1
+        now = time.time()
         try:
-            _tick(conn, config, rnd, tick, verbose)
+            if now >= decision_due:
+                decision += 1
+                _tick(conn, config, rnd, decision, verbose)
+                decision_due = time.time() + interval
+            else:
+                _refresh_marks(conn, config, rnd, verbose)
         except Exception as exc:
             if verbose:
-                print(f"  [tick error: {exc!r}]", flush=True)
+                print(f"  [loop error: {exc!r}]", flush=True)
         remaining = end - time.time()
         if remaining <= 0:
             break
-        time.sleep(min(interval, remaining))
+        time.sleep(min(refresh, remaining))
 
     conn.execute("UPDATE rounds SET status='ended', deadline=? WHERE id=?",
                  (forward._now(), rnd["id"]))
     conn.commit()
     return _standings(conn, rnd, verbose)
+
+
+def _refresh_marks(conn, config, rnd, verbose):
+    """Cheap mark-to-market between decisions: revalue holdings at fresh prices,
+    persist each agent's return, and enforce the stop-loss. No LLM calls."""
+    price = _price_fn()
+    line = []
+    for r in conn.execute("SELECT * FROM round_states WHERE round_id=?",
+                          (rnd["id"],)).fetchall():
+        st = dict(r)
+        h = json.loads(st["holdings"])
+        total = st["current_capital"] + sum(q * (price(t) or 0) for t, q in h.items())
+        ret = (total / st["starting_capital"] - 1) * 100
+        if st["status"] == "active" and ret <= -config.stop_loss_pct:
+            forward._liquidate(conn, rnd["id"], st["agent_id"], st, price,
+                               datetime.now().strftime("%H:%M:%S"))
+            total = st["current_capital"]
+            ret = (total / st["starting_capital"] - 1) * 100
+        conn.execute("UPDATE round_states SET final_return_pct=? "
+                     "WHERE round_id=? AND agent_id=?",
+                     (round(ret, 3), rnd["id"], st["agent_id"]))
+        line.append(f"{forward._name(conn, st['agent_id'])} {ret:+.2f}%")
+    conn.commit()
+    if verbose:
+        print(f"  · mark {datetime.now().strftime('%H:%M:%S')}: {'  '.join(line)}",
+              flush=True)
 
 
 def _tick(conn, config, rnd, tick, verbose):
