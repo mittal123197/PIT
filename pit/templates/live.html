@@ -55,7 +55,7 @@
 <div class="panel">
   <table>
     <thead><tr><th>Agent</th><th>Stock</th><th>Qty</th><th>Buy price</th>
-      <th>Entry</th><th>Held</th></tr></thead>
+      <th>Held</th><th>Why it bought</th></tr></thead>
     <tbody>
     {% for p in trades.open_positions %}
       <tr>
@@ -63,8 +63,8 @@
         <td class="mono">{{ p.symbol }}</td>
         <td class="mono">{{ '%.0f'|format(p.qty) }}</td>
         <td class="mono">{{ p.avg_price|money }}</td>
-        <td class="mono muted">{{ p.entry_ts[11:19] if 'T' in p.entry_ts else p.entry_ts }}</td>
         <td class="mono">{{ p.held }}</td>
+        <td style="font-size:12.5px;color:var(--ink-soft);max-width:340px;">{{ p.reason or '—' }}</td>
       </tr>
     {% else %}
       <tr><td colspan="6" class="muted" style="padding:18px;">No open positions.</td></tr>
@@ -77,22 +77,24 @@
   <div class="subtitle">Round-trips — bought then sold, with holding time and profit/loss.</div></div>
 <div class="panel">
   <table>
-    <thead><tr><th>Agent</th><th>Stock</th><th>Qty</th><th>Buy</th><th>Sell</th>
-      <th>Held</th><th>P&amp;L</th></tr></thead>
+    <thead><tr><th>Agent</th><th>Stock</th><th>Buy → Sell</th>
+      <th>Held</th><th>P&amp;L</th><th>Why bought / why sold</th></tr></thead>
     <tbody>
     {% for r in trades.round_trips %}
       <tr>
         <td class="agentname">{{ r.name }}</td>
-        <td class="mono">{{ r.symbol }}</td>
-        <td class="mono">{{ '%.0f'|format(r.qty) }}</td>
-        <td class="mono">{{ r.buy_price|money }}</td>
-        <td class="mono">{{ r.sell_price|money }}</td>
+        <td class="mono">{{ r.symbol }} <span class="muted">×{{ '%.0f'|format(r.qty) }}</span></td>
+        <td class="mono">{{ r.buy_price|money }} → {{ r.sell_price|money }}</td>
         <td class="mono">{{ r.hold }}</td>
         <td class="mono {{ 'up' if r.pnl_pct >= 0 else 'down' }}">{{ r.pnl_pct|pct }}
           <span class="muted">({{ r.pnl_amount|money }})</span></td>
+        <td style="font-size:12px;color:var(--ink-soft);max-width:320px;">
+          <div>▸ {{ r.buy_reason or '—' }}</div>
+          <div style="margin-top:3px;">◂ {{ r.sell_reason or '—' }}</div>
+        </td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="muted" style="padding:18px;">No completed round-trips yet —
+      <tr><td colspan="6" class="muted" style="padding:18px;">No completed round-trips yet —
         agents are still holding. Sells appear here once they exit.</td></tr>
     {% endfor %}
     </tbody>

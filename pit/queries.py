@@ -248,7 +248,8 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
         names[t["agent_id"]] = t["name"]
         key = (t["agent_id"], t["symbol"])
         if t["side"] == "buy":
-            lots[key].append({"qty": t["qty"], "price": t["price"], "ts": t["ts"]})
+            lots[key].append({"qty": t["qty"], "price": t["price"], "ts": t["ts"],
+                              "reason": t["reason"] or ""})
         else:  # sell — match FIFO
             qty = t["qty"]
             while qty > 1e-9 and lots[key]:
@@ -262,6 +263,7 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
                     "hold": _fmt_hold(_ts_seconds(lot["ts"]), _ts_seconds(t["ts"])),
                     "pnl_pct": round(pnl_pct, 2),
                     "pnl_amount": round((t["price"] - lot["price"]) * m, 2),
+                    "buy_reason": lot["reason"], "sell_reason": t["reason"] or "",
                 })
                 lot["qty"] -= m
                 qty -= m
@@ -280,6 +282,7 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
             "name": names.get(agent_id, "?"), "symbol": symbol,
             "qty": total_qty, "avg_price": round(cost / total_qty, 2),
             "entry_ts": first_ts, "held": _fmt_hold(_ts_seconds(first_ts), now),
+            "reason": q[0].get("reason", ""),
         })
     return {"round_trips": round_trips, "open_positions": open_positions,
             "fills": rows}
