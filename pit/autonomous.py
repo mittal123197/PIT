@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from . import market
 from .config import MARKET
@@ -31,6 +32,11 @@ You have NO preset list of stocks and NO fixed strategy — you decide everythin
 like a human trader starting from scratch. Find opportunities yourself: you know \
 the {_MARKET_NAME} market; you can also look at today's biggest movers. Research \
 any ticker before trading it.
+
+Actively manage your book — don't just buy and hold. Take profits on winners, \
+cut losers, and rotate into better setups; selling to lock in a gain or stop a \
+loss is part of winning. Review your open positions every turn and sell the ones \
+that have run or stalled.
 
 Hard rule: a stop-loss will liquidate you if your book falls too far — manage \
 risk. Goal: maximise return, avoid losses.
@@ -76,7 +82,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "rival_recent_messages": view.get("rival_messages", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
-        "market_movers": market.movers(n=10),   # always give a discovery surface
+        "market_movers": market.movers(n=6),   # discovery surface (small = fewer tokens)
     }
     messages = [
         {"role": "system", "content": _SYSTEM},
@@ -88,14 +94,24 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         if force:
             messages.append({"role": "user",
                              "content": "Final turn — you MUST return done=true with orders (or empty orders to hold)."})
-        try:
-            resp = _client().chat.completions.create(
-                model=model, messages=messages, temperature=0.6,
-                response_format={"type": "json_object"}, **_extra_for(model),
-            )
-            data = json.loads(resp.choices[0].message.content)
-        except Exception as exc:
-            return [], view.get("notes", "") + f" [llm-error {type(exc).__name__}]", ""
+        data = None
+        for attempt in range(3):
+            try:
+                resp = _client().chat.completions.create(
+                    model=model, messages=messages, temperature=0.6,
+                    response_format={"type": "json_object"}, **_extra_for(model),
+                )
+                data = json.loads(resp.choices[0].message.content)
+                break
+            except Exception as exc:
+                # free-tier bursts hit per-minute limits; back off and retry
+                if "RateLimit" in type(exc).__name__ and attempt < 2:
+                    time.sleep(int(os.getenv("PIT_RATELIMIT_BACKOFF", "20")))
+                    continue
+                return (_clean_orders([]),
+                        view.get("notes", "") + f" [llm-error {type(exc).__name__}]", "")
+        if data is None:
+            return [], view.get("notes", ""), ""
 
         if data.get("done") or force:
             return (_clean_orders(data.get("orders", [])),
