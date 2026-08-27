@@ -334,8 +334,9 @@ def main(argv=None):
     fst.set_defaults(func=cmd_forward_status)
 
     lv = sub.add_parser("live", help="run a live session: agents trade + trash-talk")
-    lv.add_argument("--minutes", type=int, default=120, help="session length")
-    lv.add_argument("--interval", type=int, default=180, help="seconds between ticks")
+    lv.add_argument("--minutes", type=int, default=180, help="session length")
+    lv.add_argument("--interval", type=int, default=900,
+                    help="seconds between ticks (default 15 min — swing pace)")
     lv.set_defaults(func=cmd_live)
 
     ph = sub.add_parser("history", help="show round results / trades")

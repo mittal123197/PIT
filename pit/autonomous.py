@@ -18,7 +18,7 @@ from . import market
 from .config import MARKET
 from .llm import AGENT_AWARE, DEFAULT_MODEL, _client, _extra_for, groq_available
 
-MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "2"))
+MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "1"))
 
 _MARKET_NAME = "US stock" if MARKET == "us" else "Indian (NSE)"
 _TICKER_HINT = ("US-listed tickers (e.g. AAPL, TSLA, NVDA, COIN)"
