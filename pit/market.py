@@ -33,6 +33,19 @@ def _today_key() -> str:
     return datetime.date.today().isoformat()
 
 
+def _bucket() -> str:
+    """A cache key that rolls over every few minutes, so intraday prices refresh
+    during market hours (a day-long key would freeze them)."""
+    now = datetime.datetime.now()
+    mins = int(os.getenv("PIT_QUOTE_REFRESH_MIN", "3"))
+    return now.strftime("%Y-%m-%dT%H:") + str(now.minute // max(1, mins))
+
+
+# last successfully-seen price per ticker, so a transient fetch failure returns
+# the previous price instead of collapsing a position's value to zero.
+_LAST_PRICE: dict[str, float] = {}
+
+
 # ---- public interface (dispatches to a backend) -----------------------
 
 def history(ticker: str, days: int = 30) -> list[tuple[str, float]]:
@@ -44,11 +57,18 @@ def history(ticker: str, days: int = 30) -> list[tuple[str, float]]:
 
 
 def quote(ticker: str) -> dict | None:
-    if _use_alpaca():
-        q = _alpaca_quote(ticker)
-        if q:
-            return q
-    return _yf_quote(ticker)
+    t = ticker.upper().strip()
+    q = _alpaca_quote(t) if _use_alpaca() else None
+    if not q:
+        q = _yf_quote(t)
+    if q and q.get("price"):
+        _LAST_PRICE[t] = q["price"]
+        return q
+    if t in _LAST_PRICE:  # transient failure — reuse the last good price
+        p = _LAST_PRICE[t]
+        return {"ticker": t, "price": p, "prev_close": p, "change_pct": 0.0,
+                "asof": "cached"}
+    return None
 
 
 def movers(n: int = 12, reference: list[str] | None = None) -> dict:
@@ -141,7 +161,7 @@ def _history_cached(ticker: str, period: str, day_key: str) -> tuple:
 
 def _yf_history(ticker: str, days: int = 30) -> list[tuple[str, float]]:
     period = f"{max(7, days + 6)}d"
-    return list(_history_cached(ticker.upper().strip(), period, _today_key()))
+    return list(_history_cached(ticker.upper().strip(), period, _bucket()))
 
 
 def _yf_quote(ticker: str) -> dict | None:
@@ -180,6 +200,6 @@ def _movers_cached(day_key: str, ref: tuple[str, ...], n: int) -> tuple:
 
 def _yf_movers(n: int = 12, reference: list[str] | None = None) -> dict:
     ref = tuple(reference or _BUILTIN_UNIVERSE)
-    gainers, losers = _movers_cached(_today_key(), ref, n)
+    gainers, losers = _movers_cached(_bucket(), ref, n)
     return {"gainers": [dict(r) for r in gainers],
             "losers": [dict(r) for r in losers]}
