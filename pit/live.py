@@ -34,7 +34,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
              verbose: bool = True) -> dict:
     """LLM *decisions* every `interval`s; cheap price/P&L *marks* every
     `refresh`s so the scoreboard moves continuously between decisions."""
-    refresh = refresh or int(os.getenv("PIT_MARK_REFRESH", "120"))
+    refresh = refresh or int(os.getenv("PIT_MARK_REFRESH", "30"))
     rnd = forward._active_round(conn)
     if not rnd:
         forward.start_round(conn, config, days=10_000)  # time-based; no day-resolve

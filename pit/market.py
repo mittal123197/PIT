@@ -34,11 +34,10 @@ def _today_key() -> str:
 
 
 def _bucket() -> str:
-    """A cache key that rolls over every few minutes, so intraday prices refresh
-    during market hours (a day-long key would freeze them)."""
-    now = datetime.datetime.now()
-    mins = int(os.getenv("PIT_QUOTE_REFRESH_MIN", "3"))
-    return now.strftime("%Y-%m-%dT%H:") + str(now.minute // max(1, mins))
+    """A cache key that rolls over every N seconds, so intraday prices refresh
+    (a day-long key would freeze them). Floor of 15s to avoid hammering Yahoo."""
+    secs = max(15, int(os.getenv("PIT_QUOTE_REFRESH_SEC", "30")))
+    return str(int(datetime.datetime.now().timestamp()) // secs)
 
 
 # last successfully-seen price per ticker, so a transient fetch failure returns
