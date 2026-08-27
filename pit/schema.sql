@@ -144,6 +144,17 @@ CREATE TABLE IF NOT EXISTS guideline_votes (
     UNIQUE (proposal_id, lineage_id)
 );
 
+-- Agent-to-agent messages (banter / mocking) during a live session. Each agent
+-- sees the rival's recent messages in its next decision, so a rivalry develops.
+CREATE TABLE IF NOT EXISTS agent_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id   INTEGER NOT NULL REFERENCES rounds(id),
+    agent_id   INTEGER NOT NULL REFERENCES agents(id),
+    ts         TEXT NOT NULL,
+    message    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_round ON agent_messages(round_id, id);
+
 -- Which real trading days a live (forward) round has already processed, so a
 -- daily step is idempotent and the round advances one real day at a time.
 CREATE TABLE IF NOT EXISTS live_days (

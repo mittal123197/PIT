@@ -163,9 +163,13 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
         }
-        orders, notes = autonomous.decide(
+        view["rival_messages"] = _recent_messages(conn, rnd["id"], aid)
+        orders, notes, message = autonomous.decide(
             view, day_index, rnd["length_days"], rnd["goal_pct"], guidelines)
         n_exec = _execute(conn, rnd["id"], aid, st, orders, price, date)
+        if message:
+            conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "
+                         "message) VALUES (?,?,?,?)", (rnd["id"], aid, _now(), message))
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                      (json.dumps(cfg), aid))
@@ -360,6 +364,16 @@ def _autonomous_mutation(loser_cfg, winner_trades) -> str:
         pass
     syms = ", ".join(sorted({t["symbol"] for t in winner_trades})[:6]) or "nothing"
     return f"Winner traded {syms}. Rethink entries and risk."
+
+
+def _recent_messages(conn, round_id, agent_id, limit=4) -> list[str]:
+    """The RIVAL's recent messages (not this agent's own), oldest-first."""
+    rows = conn.execute(
+        "SELECT m.message, l.name FROM agent_messages m "
+        "JOIN agents a ON a.id=m.agent_id JOIN lineages l ON l.id=a.lineage_id "
+        "WHERE m.round_id=? AND m.agent_id!=? ORDER BY m.id DESC LIMIT ?",
+        (round_id, agent_id, limit)).fetchall()
+    return [f"{r['name']}: {r['message']}" for r in reversed(rows)]
 
 
 def _name(conn, agent_id) -> str:

@@ -128,10 +128,11 @@ def cmd_forward_start(args):
     except RuntimeError as exc:
         print(f"  {exc}")
         return
+    from .config import CURRENCY
     st = forward.status(conn)
     print(f"Live round #{st['round_number']} started — {st['length_days']} "
-          f"trading days, goal {st['goal_pct']}%, two autonomous agents from ₹"
-          f"{DEFAULT.base_capital:,.0f} paper each.")
+          f"trading days, goal {st['goal_pct']}%, two autonomous agents from "
+          f"{CURRENCY}{DEFAULT.base_capital:,.0f} paper each.")
     print("  Run `pit forward-step` once per day after the NSE close (~15:30 IST).")
 
 
@@ -158,6 +159,17 @@ def cmd_forward_step(args):
         print(f"  mutation → {o['loser']}: {o['mutation_note']}")
     else:
         print(f"\n  Day {res['day']} of {res['of']} processed ({res['date']}).")
+
+
+def cmd_live(args):
+    from . import live
+    from .llm import groq_available
+    if not groq_available():
+        print("  Live agents need Groq. Set GROQ_API_KEY in pit/.env.")
+        return
+    conn = dbm.connect()
+    dbm.init_db(conn)
+    live.run_live(conn, minutes=args.minutes, interval=args.interval)
 
 
 def cmd_forward_status(args):
@@ -320,6 +332,11 @@ def main(argv=None):
 
     fst = sub.add_parser("forward-status", help="show the live round's progress")
     fst.set_defaults(func=cmd_forward_status)
+
+    lv = sub.add_parser("live", help="run a live session: agents trade + trash-talk")
+    lv.add_argument("--minutes", type=int, default=120, help="session length")
+    lv.add_argument("--interval", type=int, default=180, help="seconds between ticks")
+    lv.set_defaults(func=cmd_live)
 
     ph = sub.add_parser("history", help="show round results / trades")
     ph.add_argument("--round", type=int, help="show trades for this round id")

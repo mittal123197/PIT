@@ -15,6 +15,7 @@ from markupsafe import Markup
 
 from . import db as dbm
 from . import queries as q
+from .config import CURRENCY
 
 app = Flask(__name__)
 
@@ -36,7 +37,7 @@ def _pct(value) -> str:
 def _money(value) -> str:
     if value is None:
         return "—"
-    return f"₹{value:,.0f}"
+    return f"{CURRENCY}{value:,.0f}"
 
 
 @app.template_filter("spark")
@@ -61,6 +62,12 @@ def index():
         h2h=q.latest_head_to_head(conn),
         live=q.live_status(conn),
     )
+
+
+@app.route("/live")
+def live_view():
+    conn = _conn()
+    return render_template("live.html", data=q.live_view(conn))
 
 
 @app.route("/round/<int:round_id>")

@@ -39,25 +39,32 @@ Stakes: if you LOSE this round you are retired and replaced by a version rebuilt
 from the WINNER's trades. You can see your rival's live return but not their \
 trades. Play to win.
 """ if AGENT_AWARE else "") + """
+You can see your rival's recent messages. This is a rivalry — talk trash, \
+defend your calls, mock their picks, get in their head. Keep it playful but \
+competitive.
+
 Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
-  "research": { "movers": true, "history": ["TICKER.NS", ...] },
-  "orders": [ {"ticker":"TICKER.NS","side":"buy"|"sell","amount_inr":N,"reason":"..."} ],
+  "research": { "movers": true, "history": ["TICKER", ...] },
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"reason":"..."} ],
+  "message": "a short taunt/comment to your rival (<=140 chars); they will read it",
   "done": true|false,
   "notes": "carry-forward notes to your future self"
 }
 Set done=false and fill "research" to gather data first (you'll be called again \
-with the results). Set done=true with your "orders" to act. Only """ + _TICKER_HINT + """. \
-Buy only within your cash; sell only what you hold. Amounts are in your account \
-currency. You may also give "qty" (whole shares) instead of amount_inr."""
+with the results). Set done=true with your "orders" (and a "message") to act. \
+Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what you hold. \
+Amounts are in your account currency. You may also give "qty" (whole shares) \
+instead of amount_inr."""
 
 
 def decide(view: dict, day: int, total_days: int, goal_pct: float,
-           guidelines: list[str], model: str | None = None) -> tuple[list[dict], str]:
-    """Run the research→decide loop. Returns (orders, updated_notes)."""
+           guidelines: list[str], model: str | None = None
+           ) -> tuple[list[dict], str, str]:
+    """Run the research→decide loop. Returns (orders, updated_notes, message)."""
     if not groq_available():
-        return [], view.get("notes", "")
+        return [], view.get("notes", ""), ""
 
     model = model or DEFAULT_MODEL
     context = {
@@ -66,6 +73,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "your_total_value": view["total_value"],
         "your_return_pct": view["return_pct"],
         "rival_return_pct": view.get("opponent_return_pct"),
+        "rival_recent_messages": view.get("rival_messages", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
         "market_movers": market.movers(n=10),   # always give a discovery surface
@@ -87,10 +95,12 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
             )
             data = json.loads(resp.choices[0].message.content)
         except Exception as exc:
-            return [], view.get("notes", "") + f" [llm-error {type(exc).__name__}]"
+            return [], view.get("notes", "") + f" [llm-error {type(exc).__name__}]", ""
 
         if data.get("done") or force:
-            return _clean_orders(data.get("orders", [])), str(data.get("notes", ""))[:600]
+            return (_clean_orders(data.get("orders", [])),
+                    str(data.get("notes", ""))[:600],
+                    str(data.get("message", ""))[:200])
 
         # otherwise: fulfil the research request and loop
         research = data.get("research") or {}
@@ -104,7 +114,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         messages.append({"role": "user",
                          "content": json.dumps({"research_results": results})})
 
-    return [], view.get("notes", "")
+    return [], view.get("notes", ""), ""
 
 
 def _clean_orders(orders: list) -> list[dict]:

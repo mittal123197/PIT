@@ -176,6 +176,37 @@ def live_status(conn: sqlite3.Connection) -> dict | None:
             "goal_pct": r["goal_pct"]}
 
 
+def live_view(conn: sqlite3.Connection) -> dict | None:
+    """The active (or most recent) live session — agents, positions, banter."""
+    r = conn.execute("SELECT * FROM rounds WHERE status IN ('live','ended') "
+                     "ORDER BY id DESC LIMIT 1").fetchone()
+    if not r:
+        return None
+    agents = _rows(conn.execute(
+        """SELECT rs.agent_id, rs.starting_capital, rs.current_capital, rs.holdings,
+                  rs.final_return_pct, rs.status, rs.trade_count,
+                  l.name, l.id AS lineage_id
+           FROM round_states rs JOIN agents a ON a.id = rs.agent_id
+           JOIN lineages l ON l.id = a.lineage_id WHERE rs.round_id=?""",
+        (r["id"],)))
+    for a in agents:
+        try:
+            a["holdings"] = json.loads(a["holdings"])
+        except Exception:
+            a["holdings"] = {}
+        ret = a["final_return_pct"] or 0.0
+        a["value"] = round(a["starting_capital"] * (1 + ret / 100), 2)
+        a["ret"] = ret
+    agents.sort(key=lambda x: x["ret"], reverse=True)
+    messages = _rows(conn.execute(
+        """SELECT m.ts, m.message, l.name, l.id AS lineage_id
+           FROM agent_messages m JOIN agents a ON a.id = m.agent_id
+           JOIN lineages l ON l.id = a.lineage_id
+           WHERE m.round_id=? ORDER BY m.id""", (r["id"],)))
+    return {"round": dict(r), "agents": agents, "messages": messages,
+            "is_live": r["status"] == "live"}
+
+
 def latest_head_to_head(conn: sqlite3.Connection) -> dict | None:
     row = conn.execute(
         "SELECT id FROM rounds WHERE status='resolved' "

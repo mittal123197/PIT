@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Live Arena — PIT{% endblock %}
+{% block body %}
+{% if data and data.is_live %}
+<meta http-equiv="refresh" content="8">
+{% endif %}
+
+<a href="/" class="backlink">← leaderboard</a>
+
+{% if not data %}
+  <div class="sec"><div class="eyebrow">Live arena</div></div>
+  <p class="muted">No live session yet. Start one with
+    <span class="mono">python3 -m pit.cli live</span>.</p>
+{% else %}
+<div style="display:flex;align-items:center;justify-content:space-between;
+  flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+  <div class="eyebrow" style="color:{{ 'var(--liq)' if data.is_live else 'var(--ink-faint)' }};">
+    {% if data.is_live %}● live — trading & talking{% else %}session ended{% endif %}</div>
+  {% if data.is_live %}<span class="mono muted" style="font-size:11px;">
+    auto-refreshing every 8s</span>{% endif %}
+</div>
+
+<div class="grid2" style="margin-bottom:26px;">
+  {% for a in data.agents %}
+  <div class="panel" style="margin-bottom:0;
+    border-color:{{ a.lineage_id|lcolor if loop.first else 'var(--line)' }};">
+    <h2 style="display:flex;justify-content:space-between;align-items:center;">
+      <span><span class="dot" style="background:{{ a.lineage_id|lcolor }};"></span>{{ a.name }}</span>
+      {% if loop.first %}<span class="pill gold">leading</span>{% endif %}
+      {% if a.status == 'liquidated' %}<span class="pill lose">stopped out</span>{% endif %}
+    </h2>
+    <div style="padding:16px 20px;">
+      <div style="font-family:'Space Grotesk';font-weight:700;font-size:30px;"
+        class="{{ 'up' if a.ret >= 0 else 'down' }}">{{ a.ret|pct }}</div>
+      <div class="mono muted" style="font-size:13px;margin-top:2px;">
+        {{ a.value|money }} <span class="muted">·</span> cash {{ a.current_capital|money }}
+        <span class="muted">·</span> {{ a.trade_count }} trades</div>
+      <div style="margin-top:14px;">
+        {% if a.holdings %}
+          {% for sym, qty in a.holdings.items() %}
+            <span class="pill status" style="margin:2px 4px 2px 0;display:inline-block;">
+              {{ sym }} ×{{ '%.0f'|format(qty) }}</span>
+          {% endfor %}
+        {% else %}
+          <span class="muted" style="font-size:12.5px;">all cash — no open positions</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="sec"><div class="eyebrow">Trash talk</div>
+  <div class="subtitle">The agents can see each other's messages and fire back.</div></div>
+<div class="panel" style="padding:8px 6px;">
+  {% if data.messages %}
+    {% for m in data.messages %}
+      <div style="display:flex;gap:10px;padding:9px 14px;align-items:baseline;">
+        <span class="dot" style="background:{{ m.lineage_id|lcolor }};flex:none;margin-top:6px;"></span>
+        <div>
+          <span class="agentname" style="font-size:13px;color:{{ m.lineage_id|lcolor }};">{{ m.name }}</span>
+          <span class="mono muted" style="font-size:10px;margin-left:6px;">{{ m.ts[11:19] }}</span>
+          <div style="font-size:14px;margin-top:1px;">{{ m.message }}</div>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="muted" style="padding:16px;font-size:13px;">No messages yet — the
+      first taunts land after the opening tick.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% endblock %}
