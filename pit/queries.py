@@ -207,6 +207,84 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
             "is_live": r["status"] == "live"}
 
 
+def _ts_seconds(ts: str):
+    """Best-effort seconds-of-day from either 'HH:MM:SS' or an ISO timestamp."""
+    try:
+        if "T" in ts or (len(ts) > 10 and "-" in ts):
+            from datetime import datetime
+            dt = datetime.fromisoformat(ts.replace("Z", ""))
+            return dt.hour * 3600 + dt.minute * 60 + dt.second
+        h, m, s = ts.split(":")[:3]
+        return int(h) * 3600 + int(m) * 60 + int(s)
+    except Exception:
+        return None
+
+
+def _fmt_hold(a, b):
+    if a is None or b is None:
+        return "—"
+    secs = b - a
+    if secs < 0:
+        secs += 86400
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        return f"{secs // 60}m {secs % 60}s"
+    return f"{secs // 3600}h {(secs % 3600) // 60}m"
+
+
+def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
+    """FIFO-match fills into completed round-trips (buy→sell with P&L + holding
+    time) plus the still-open positions. Answers 'what did they buy, at what
+    price, sell price, how long held'."""
+    from collections import defaultdict, deque
+    rows = _rows(conn.execute(
+        """SELECT t.*, l.name FROM trades t JOIN agents a ON a.id = t.agent_id
+           JOIN lineages l ON l.id = a.lineage_id
+           WHERE t.round_id=? ORDER BY t.id""", (round_id,)))
+    lots = defaultdict(deque)   # (agent_id, symbol) -> open buy lots
+    round_trips, names = [], {}
+    for t in rows:
+        names[t["agent_id"]] = t["name"]
+        key = (t["agent_id"], t["symbol"])
+        if t["side"] == "buy":
+            lots[key].append({"qty": t["qty"], "price": t["price"], "ts": t["ts"]})
+        else:  # sell — match FIFO
+            qty = t["qty"]
+            while qty > 1e-9 and lots[key]:
+                lot = lots[key][0]
+                m = min(qty, lot["qty"])
+                pnl_pct = (t["price"] / lot["price"] - 1) * 100
+                round_trips.append({
+                    "name": t["name"], "symbol": t["symbol"], "qty": m,
+                    "buy_price": lot["price"], "sell_price": t["price"],
+                    "buy_ts": lot["ts"], "sell_ts": t["ts"],
+                    "hold": _fmt_hold(_ts_seconds(lot["ts"]), _ts_seconds(t["ts"])),
+                    "pnl_pct": round(pnl_pct, 2),
+                    "pnl_amount": round((t["price"] - lot["price"]) * m, 2),
+                })
+                lot["qty"] -= m
+                qty -= m
+                if lot["qty"] <= 1e-9:
+                    lots[key].popleft()
+
+    open_positions = []
+    now = _ts_seconds(__import__("datetime").datetime.now().strftime("%H:%M:%S"))
+    for (agent_id, symbol), q in lots.items():
+        total_qty = sum(l["qty"] for l in q)
+        if total_qty <= 1e-9:
+            continue
+        cost = sum(l["qty"] * l["price"] for l in q)
+        first_ts = q[0]["ts"]
+        open_positions.append({
+            "name": names.get(agent_id, "?"), "symbol": symbol,
+            "qty": total_qty, "avg_price": round(cost / total_qty, 2),
+            "entry_ts": first_ts, "held": _fmt_hold(_ts_seconds(first_ts), now),
+        })
+    return {"round_trips": round_trips, "open_positions": open_positions,
+            "fills": rows}
+
+
 def latest_head_to_head(conn: sqlite3.Connection) -> dict | None:
     row = conn.execute(
         "SELECT id FROM rounds WHERE status='resolved' "

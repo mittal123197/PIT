@@ -50,6 +50,79 @@
   {% endfor %}
 </div>
 
+<div class="sec"><div class="eyebrow">Open positions</div>
+  <div class="subtitle">What each agent is holding right now — entry price and how long held.</div></div>
+<div class="panel">
+  <table>
+    <thead><tr><th>Agent</th><th>Stock</th><th>Qty</th><th>Buy price</th>
+      <th>Entry</th><th>Held</th></tr></thead>
+    <tbody>
+    {% for p in trades.open_positions %}
+      <tr>
+        <td class="agentname">{{ p.name }}</td>
+        <td class="mono">{{ p.symbol }}</td>
+        <td class="mono">{{ '%.0f'|format(p.qty) }}</td>
+        <td class="mono">{{ p.avg_price|money }}</td>
+        <td class="mono muted">{{ p.entry_ts[11:19] if 'T' in p.entry_ts else p.entry_ts }}</td>
+        <td class="mono">{{ p.held }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted" style="padding:18px;">No open positions.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="sec"><div class="eyebrow">Completed trades</div>
+  <div class="subtitle">Round-trips — bought then sold, with holding time and profit/loss.</div></div>
+<div class="panel">
+  <table>
+    <thead><tr><th>Agent</th><th>Stock</th><th>Qty</th><th>Buy</th><th>Sell</th>
+      <th>Held</th><th>P&amp;L</th></tr></thead>
+    <tbody>
+    {% for r in trades.round_trips %}
+      <tr>
+        <td class="agentname">{{ r.name }}</td>
+        <td class="mono">{{ r.symbol }}</td>
+        <td class="mono">{{ '%.0f'|format(r.qty) }}</td>
+        <td class="mono">{{ r.buy_price|money }}</td>
+        <td class="mono">{{ r.sell_price|money }}</td>
+        <td class="mono">{{ r.hold }}</td>
+        <td class="mono {{ 'up' if r.pnl_pct >= 0 else 'down' }}">{{ r.pnl_pct|pct }}
+          <span class="muted">({{ r.pnl_amount|money }})</span></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted" style="padding:18px;">No completed round-trips yet —
+        agents are still holding. Sells appear here once they exit.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="sec"><div class="eyebrow">Every fill</div>
+  <div class="subtitle">The raw ledger — each buy/sell as it happened.</div></div>
+<div class="panel">
+  <table>
+    <thead><tr><th>Time</th><th>Agent</th><th>Side</th><th>Qty</th><th>Stock</th>
+      <th>Price</th><th class="hide-sm">Reason</th></tr></thead>
+    <tbody>
+    {% for f in trades.fills %}
+      <tr>
+        <td class="mono muted">{{ f.ts[11:19] if 'T' in f.ts else f.ts }}</td>
+        <td class="agentname">{{ f.name }}</td>
+        <td><span class="pill {{ 'win' if f.side == 'buy' else 'lose' }}">{{ f.side }}</span></td>
+        <td class="mono">{{ '%.0f'|format(f.qty) }}</td>
+        <td class="mono">{{ f.symbol }}</td>
+        <td class="mono">{{ f.price|money }}</td>
+        <td class="muted hide-sm" style="font-size:12px;">{{ f.reason or '' }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="7" class="muted" style="padding:18px;">No trades yet.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
 <div class="sec"><div class="eyebrow">Trash talk</div>
   <div class="subtitle">The agents can see each other's messages and fire back.</div></div>
 <div class="panel" style="padding:8px 6px;">

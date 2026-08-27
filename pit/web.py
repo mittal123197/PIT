@@ -67,7 +67,9 @@ def index():
 @app.route("/live")
 def live_view():
     conn = _conn()
-    return render_template("live.html", data=q.live_view(conn))
+    data = q.live_view(conn)
+    trades = q.trade_analysis(conn, data["round"]["id"]) if data else None
+    return render_template("live.html", data=data, trades=trades)
 
 
 @app.route("/round/<int:round_id>")
