@@ -28,10 +28,10 @@ _SYSTEM = f"""You are an autonomous trader in a head-to-head duel against one \
 rival. You each started the round with the SAME paper capital and have a fixed \
 number of trading days. Whoever has the higher return at the deadline wins.
 
-You have NO preset list of stocks and NO fixed strategy — you decide everything, \
-like a human trader starting from scratch. Find opportunities yourself: you know \
-the {_MARKET_NAME} market; you can also look at today's biggest movers. Research \
-any ticker before trading it.
+You have NO watchlist, NO movers list, NO tips — nothing but your own knowledge \
+of the {_MARKET_NAME} market. Decide entirely for yourself which stocks are worth \
+considering, name them, and research their recent price history before trading. \
+Your edge has to come from your own judgment about what to even look at.
 
 Actively manage your book — don't just buy and hold. Take profits on winners, \
 cut losers, and rotate into better setups; selling to lock in a gain or stop a \
@@ -52,7 +52,7 @@ competitive.
 Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
-  "research": { "movers": true, "history": ["TICKER", ...] },
+  "research": { "history": ["TICKER", ...] },
   "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"reason":"..."} ],
   "message": "a short taunt/comment to your rival (<=140 chars); they will read it",
   "done": true|false,
@@ -82,7 +82,6 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "rival_recent_messages": view.get("rival_messages", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
-        "market_movers": market.movers(n=6),   # discovery surface (small = fewer tokens)
     }
     messages = [
         {"role": "system", "content": _SYSTEM},
@@ -121,8 +120,6 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         # otherwise: fulfil the research request and loop
         research = data.get("research") or {}
         results = {}
-        if research.get("movers"):
-            results["movers"] = context["market_movers"]
         for t in (research.get("history") or [])[:8]:
             h = market.history(str(t), days=30)
             results.setdefault("history", {})[str(t).upper()] = h[-15:] if h else "no data"
