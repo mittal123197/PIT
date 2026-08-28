@@ -162,14 +162,27 @@ def cmd_forward_step(args):
 
 
 def cmd_live(args):
-    from . import live
+    from . import live, replay
     from .llm import groq_available
     if not groq_available():
         print("  Live agents need Groq. Set GROQ_API_KEY in pit/.env.")
         return
     conn = dbm.connect()
     dbm.init_db(conn)
-    live.run_live(conn, minutes=args.minutes, interval=args.interval)
+    if args.replay:
+        from datetime import date
+        day = date.fromisoformat(args.date) if args.date else None
+        replay.start(day=day, compress_minutes=args.compress)
+        # Compressed replay -> proportionally shorter decision interval so we
+        # get multiple decisions during the compressed session.
+        interval = args.interval if args.interval != 900 else max(60, args.compress * 60 // 5)
+        try:
+            live.run_live(conn, minutes=args.compress + 1,
+                          interval=interval, refresh=args.refresh)
+        finally:
+            replay.stop()
+    else:
+        live.run_live(conn, minutes=args.minutes, interval=args.interval)
 
 
 def cmd_forward_status(args):
@@ -337,6 +350,13 @@ def main(argv=None):
     lv.add_argument("--minutes", type=int, default=180, help="session length")
     lv.add_argument("--interval", type=int, default=900,
                     help="seconds between ticks (default 15 min — swing pace)")
+    lv.add_argument("--replay", action="store_true",
+                    help="replay a past trading day at compressed speed")
+    lv.add_argument("--date", help="replay day (YYYY-MM-DD); default = last trading day")
+    lv.add_argument("--compress", type=int, default=20,
+                    help="replay: wall-clock minutes for the full session (default 20)")
+    lv.add_argument("--refresh", type=int, default=10,
+                    help="seconds between price/P&L marks (default 10)")
     lv.set_defaults(func=cmd_live)
 
     ph = sub.add_parser("history", help="show round results / trades")
