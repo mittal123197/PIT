@@ -36,7 +36,7 @@ def _today_key() -> str:
 def _bucket() -> str:
     """A cache key that rolls over every N seconds, so intraday prices refresh
     (a day-long key would freeze them). Floor of 15s to avoid hammering Yahoo."""
-    secs = max(15, int(os.getenv("PIT_QUOTE_REFRESH_SEC", "30")))
+    secs = max(15, int(os.getenv("PIT_QUOTE_REFRESH_SEC", "120")))
     return str(int(datetime.datetime.now().timestamp()) // secs)
 
 
@@ -145,7 +145,7 @@ def _history_cached(ticker: str, period: str, day_key: str) -> tuple:
     yf = _yf()
     try:
         df = yf.download(ticker, period=period, interval="1d",
-                         progress=False, auto_adjust=True)
+                         progress=False, auto_adjust=True, timeout=15)
         if df is None or df.empty:
             return ()
         close = df["Close"]
@@ -180,7 +180,7 @@ def _movers_cached(day_key: str, ref: tuple[str, ...], n: int) -> tuple:
     rows = []
     try:
         df = yf.download(list(ref), period="7d", interval="1d",
-                         progress=False, auto_adjust=True)
+                         progress=False, auto_adjust=True, timeout=15)
         close = df["Close"]
         for t in ref:
             try:
