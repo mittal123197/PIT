@@ -103,11 +103,14 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
                 data = json.loads(content)
                 break
             except Exception as exc:
-                if attempt < 2 and _is_retryable(exc):
-                    time.sleep(int(os.getenv("PIT_RATELIMIT_BACKOFF", "15")))
-                    # last retry: fall back to Groq so the agent still acts
-                    if attempt == 1 and active_model.startswith("openrouter:") \
-                            and groq_available():
+                # malformed JSON is common on some free models; treat it like
+                # any other retryable failure rather than giving up immediately
+                malformed = isinstance(exc, json.JSONDecodeError)
+                if attempt < 2 and (_is_retryable(exc) or malformed):
+                    time.sleep(0 if malformed else
+                              int(os.getenv("PIT_RATELIMIT_BACKOFF", "15")))
+                    # on the last retry, fall back to Groq so the agent still acts
+                    if attempt == 1 and groq_available():
                         active_model = DEFAULT_MODEL
                     continue
                 return (_clean_orders([]),
