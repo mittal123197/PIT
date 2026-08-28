@@ -114,6 +114,8 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
                         view.get("notes", "") + f" [llm-error {type(exc).__name__}]", "")
         if data is None:
             return [], view.get("notes", ""), ""
+        if not isinstance(data, dict):        # some models wrap in a list
+            data = {"orders": data} if isinstance(data, list) else {}
 
         if data.get("done") or force:
             return (_clean_orders(data.get("orders", [])),
@@ -122,6 +124,12 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
 
         # otherwise: fulfil the research request and loop
         research = data.get("research") or {}
+        # Some models return `research` as a bare list of tickers instead of
+        # {"history": [...]}. Normalise either shape.
+        if isinstance(research, list):
+            research = {"history": research}
+        elif not isinstance(research, dict):
+            research = {}
         results = {}
         for t in (research.get("history") or [])[:8]:
             h = market.history(str(t), days=30)
