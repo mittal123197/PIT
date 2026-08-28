@@ -139,7 +139,7 @@ def _tick(conn, config, rnd, tick, verbose):
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid),
         }
         orders, notes, message = autonomous.decide(
-            view, tick, 0, rnd["goal_pct"], guidelines)
+            view, tick, 0, rnd["goal_pct"], guidelines, model=cfg.get("model"))
         n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts)
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",

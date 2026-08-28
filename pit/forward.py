@@ -11,6 +11,7 @@ Paper only: fills are at the real last close, no real orders anywhere.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 
@@ -30,9 +31,15 @@ def _today() -> str:
 
 # ---- seeding two autonomous agents ------------------------------------
 
+# Each agent gets a DIFFERENT frontier brain (via OpenRouter) — same goal,
+# same freedom, different reasoning. Override with env if you like.
+_RONIN_MODEL = os.getenv("PIT_RONIN_MODEL",
+                         "openrouter:nvidia/nemotron-3-super-120b-a12b:free")
+_VIPER_MODEL = os.getenv("PIT_VIPER_MODEL", "openrouter:minimax/minimax-m3:free")
+
 AUTONOMOUS_SEED = [
-    ("RONIN", {"mode": "autonomous", "notes": "", "persona": "fresh trader, no fixed style"}),
-    ("VIPER", {"mode": "autonomous", "notes": "", "persona": "fresh trader, no fixed style"}),
+    ("RONIN", {"mode": "autonomous", "notes": "", "model": _RONIN_MODEL}),
+    ("VIPER", {"mode": "autonomous", "notes": "", "model": _VIPER_MODEL}),
 ]
 
 
@@ -165,7 +172,8 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
         }
         view["rival_messages"] = _recent_messages(conn, rnd["id"], aid)
         orders, notes, message = autonomous.decide(
-            view, day_index, rnd["length_days"], rnd["goal_pct"], guidelines)
+            view, day_index, rnd["length_days"], rnd["goal_pct"], guidelines,
+            model=cfg.get("model"))
         n_exec = _execute(conn, rnd["id"], aid, st, orders, price, date)
         if message:
             conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "

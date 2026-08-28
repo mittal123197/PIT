@@ -16,7 +16,8 @@ import time
 
 from . import market
 from .config import MARKET
-from .llm import AGENT_AWARE, DEFAULT_MODEL, _client, _extra_for, groq_available
+from .llm import (AGENT_AWARE, DEFAULT_MODEL, _is_retryable, groq_available,
+                  llm_chat)
 
 MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "1"))
 
@@ -94,18 +95,20 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
             messages.append({"role": "user",
                              "content": "Final turn — you MUST return done=true with orders (or empty orders to hold)."})
         data = None
+        active_model = model
         for attempt in range(3):
             try:
-                resp = _client().chat.completions.create(
-                    model=model, messages=messages, temperature=0.6,
-                    response_format={"type": "json_object"}, **_extra_for(model),
-                )
-                data = json.loads(resp.choices[0].message.content)
+                content = llm_chat(active_model, messages, temperature=0.6,
+                                   json_mode=True)
+                data = json.loads(content)
                 break
             except Exception as exc:
-                # free-tier bursts hit per-minute limits; back off and retry
-                if "RateLimit" in type(exc).__name__ and attempt < 2:
-                    time.sleep(int(os.getenv("PIT_RATELIMIT_BACKOFF", "20")))
+                if attempt < 2 and _is_retryable(exc):
+                    time.sleep(int(os.getenv("PIT_RATELIMIT_BACKOFF", "15")))
+                    # last retry: fall back to Groq so the agent still acts
+                    if attempt == 1 and active_model.startswith("openrouter:") \
+                            and groq_available():
+                        active_model = DEFAULT_MODEL
                     continue
                 return (_clean_orders([]),
                         view.get("notes", "") + f" [llm-error {type(exc).__name__}]", "")

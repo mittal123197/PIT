@@ -41,6 +41,44 @@ def _extra_for(model: str) -> dict:
     return {}
 
 
+# ---- unified chat: Groq, or any OpenAI-compatible provider (OpenRouter) ----
+
+def _is_retryable(exc) -> bool:
+    s = f"{type(exc).__name__} {exc}".lower()
+    return any(k in s for k in ("429", "ratelimit", "rate limit", "timeout",
+                                "temporarily", "overloaded", "503"))
+
+
+def _openrouter_chat(model: str, messages: list, temperature: float,
+                     json_mode: bool) -> str:
+    import urllib.request
+    body = {"model": model, "messages": messages, "temperature": temperature}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    req = urllib.request.Request(
+        "https://openrouter.ai/api/v1/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY', '')}",
+                 "Content-Type": "application/json",
+                 "X-Title": "PIT Arena"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        return json.loads(r.read().decode())["choices"][0]["message"]["content"]
+
+
+def llm_chat(model: str, messages: list, temperature: float = 0.6,
+             json_mode: bool = True) -> str:
+    """Return the assistant message content. `openrouter:<model>` routes to
+    OpenRouter (any frontier model); anything else routes to Groq."""
+    if model.startswith("openrouter:"):
+        return _openrouter_chat(model[len("openrouter:"):], messages,
+                                temperature, json_mode)
+    kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
+    kwargs.update(_extra_for(model))
+    resp = _client().chat.completions.create(
+        model=model, messages=messages, temperature=temperature, **kwargs)
+    return resp.choices[0].message.content
+
+
 # Whether agents are told the evolutionary stakes. Toggle to run the same
 # arena with "aware" vs "blind" agents and compare — it can cut both ways
 # (sharper play, or meta-gaming the win condition). Set PIT_AGENT_AWARE=0 to
