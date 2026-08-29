@@ -77,6 +77,7 @@ def round_detail(conn: sqlite3.Connection, round_id: int) -> dict | None:
     if not rnd:
         return None
     rnd = dict(rnd)
+    rnd["time_based"] = not rnd["length_days"]  # 0 => live/replay, not a real day count
     states = _rows(conn.execute(
         """SELECT rs.*, l.name AS lineage, l.id AS lineage_id,
                   a.generation, a.rating
@@ -145,12 +146,15 @@ def arena_summary(conn: sqlite3.Connection) -> dict:
     last_len = conn.execute(
         "SELECT length_days FROM rounds ORDER BY round_number DESC LIMIT 1"
     ).fetchone()
+    # length_days=0 is the "time-based session" sentinel (live/replay), not a
+    # real day count — don't surface it as one.
+    days = last_len["length_days"] if last_len else None
     return {
         "total_rounds": total,
         "resolved_rounds": resolved,
         "total_trades": trades,
         "lineages": lineages,
-        "last_round_days": last_len["length_days"] if last_len else None,
+        "last_round_days": days if days else None,
     }
 
 
@@ -173,6 +177,7 @@ def live_status(conn: sqlite3.Connection) -> dict | None:
                         (r["id"],)).fetchone()["n"]
     return {"round_id": r["id"], "round_number": r["round_number"],
             "days_done": done, "length_days": r["length_days"],
+            "time_based": not r["length_days"],  # 0 => live/replay, no fixed length
             "goal_pct": r["goal_pct"]}
 
 

@@ -9,8 +9,10 @@
   <span class="mono" style="color:var(--liq);font-size:12px;letter-spacing:0.08em;">
     ● LIVE</span>
   <span style="margin-left:10px;font-size:13.5px;">Autonomous round #{{ live.round_number }}
-    in progress — day {{ live.days_done }} of {{ live.length_days }}, agents trading
-    real market data →</span>
+    in progress —
+    {% if live.time_based %}live session, agents trading real market data
+    {% else %}day {{ live.days_done }} of {{ live.length_days }}, agents trading real market data
+    {% endif %} →</span>
 </a>
 {% endif %}
 
@@ -190,7 +192,7 @@
     {% for r in rounds %}
       <tr class="clickable" onclick="location='/round/{{ r.id }}'">
         <td class="mono muted">#{{ r.round_number }}</td>
-        <td class="mono hide-sm muted">{{ r.length_days }}d</td>
+        <td class="mono hide-sm muted">{{ r.length_days ~ 'd' if r.length_days else 'live' }}</td>
         <td>
           {% if r.winner %}<span class="agentname up">{{ r.winner }}</span>
             <span class="muted" style="font-size:12px;"> beat {{ r.loser }}</span>

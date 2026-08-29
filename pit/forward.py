@@ -81,7 +81,9 @@ def start_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
     ids = ensure_autonomous_lineages(conn, config)
     la = conn.execute("SELECT * FROM lineages WHERE id=?", (ids[0],)).fetchone()
     lb = conn.execute("SELECT * FROM lineages WHERE id=?", (ids[1],)).fetchone()
-    length = days or config.start_round_days
+    # 0 means "time-based session, no fixed day count" (used by live sessions) —
+    # `days or config...` would wrongly treat 0 as falsy and override it.
+    length = days if days is not None else config.start_round_days
     rnum = (conn.execute("SELECT COALESCE(MAX(round_number),0) n FROM rounds")
             .fetchone()["n"] + 1)
     rid = conn.execute(

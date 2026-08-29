@@ -86,10 +86,11 @@ class ArenaConfig:
     win_stake_bonus_pct: float = _env_float("PIT_WIN_STAKE_BONUS_PCT", 25.0)
     loss_stake_penalty_pct: float = _env_float("PIT_LOSS_STAKE_PENALTY_PCT", 20.0)
 
-    # --- round length (see build plan: 7-day rounds, shrink to a 4-day floor) ---
+    # --- round length: fixed at 7 days, shrink mechanic OFF by default ---
+    # (set PIT_ROUND_SHRINK_DAYS > 0 to bring back the shrinking-rounds idea)
     start_round_days: int = _env_int("PIT_START_ROUND_DAYS", 7)
-    round_shrink_days: int = _env_int("PIT_ROUND_SHRINK_DAYS", 1)
-    min_round_days: int = _env_int("PIT_MIN_ROUND_DAYS", 4)
+    round_shrink_days: int = _env_int("PIT_ROUND_SHRINK_DAYS", 0)
+    min_round_days: int = _env_int("PIT_MIN_ROUND_DAYS", 5)
 
     # goal_pct is display-only narrative; winners are resolved by the return
     # cascade, not by the goal. Scales with round length: 0.714/day => ~5% over

@@ -37,7 +37,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
     refresh = refresh or int(os.getenv("PIT_MARK_REFRESH", "120"))
     rnd = forward._active_round(conn)
     if not rnd:
-        forward.start_round(conn, config, days=10_000)  # time-based; no day-resolve
+        forward.start_round(conn, config, days=0)  # 0 = time-based; no day-resolve
         rnd = forward._active_round(conn)
     if verbose:
         print(f"● LIVE — {MARKET.upper()} market, {minutes} min. Decisions every "

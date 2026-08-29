@@ -4,8 +4,9 @@
 
 <a href="/" class="backlink">← all rounds</a>
 
-<div class="eyebrow">Round #{{ round.round_number }} · {{ round.length_days }} days ·
-  goal {{ round.goal_pct }}%</div>
+<div class="eyebrow">Round #{{ round.round_number }} ·
+  {% if round.time_based %}live session (no fixed day count)
+  {% else %}{{ round.length_days }} days · goal {{ round.goal_pct }}%{% endif %}</div>
 
 <div class="grid2" style="margin-bottom:26px;">
   {% for s in states %}
