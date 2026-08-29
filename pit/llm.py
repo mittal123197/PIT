@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 
 from .actions import Action, Hold, PlaceOrder, SetHeartbeat, SetWatch
 from .policies import AgentContext, AgentPolicy
@@ -49,11 +50,11 @@ def _is_retryable(exc) -> bool:
                                 "temporarily", "overloaded", "503"))
 
 
-def _openrouter_chat(model: str, messages: list, temperature: float,
-                     json_mode: bool) -> str:
+def _openrouter_post(model: str, messages: list, temperature: float,
+                     use_json_mode: bool) -> str:
     import urllib.request
     body = {"model": model, "messages": messages, "temperature": temperature}
-    if json_mode:
+    if use_json_mode:
         body["response_format"] = {"type": "json_object"}
     req = urllib.request.Request(
         "https://openrouter.ai/api/v1/chat/completions",
@@ -63,6 +64,21 @@ def _openrouter_chat(model: str, messages: list, temperature: float,
                  "X-Title": "PIT Arena"})
     with urllib.request.urlopen(req, timeout=90) as r:
         return json.loads(r.read().decode())["choices"][0]["message"]["content"]
+
+
+def _openrouter_chat(model: str, messages: list, temperature: float,
+                     json_mode: bool) -> str:
+    try:
+        return _openrouter_post(model, messages, temperature, json_mode)
+    except urllib.error.HTTPError as exc:
+        # Some free/community models on OpenRouter don't support the
+        # structured-outputs feature — fall back to plain prompting (the
+        # system prompt already asks for JSON-only) rather than failing.
+        if json_mode and exc.code == 400:
+            body = exc.read().decode() if hasattr(exc, "read") else ""
+            if "structured-output" in body or "response_format" in body:
+                return _openrouter_post(model, messages, temperature, False)
+        raise
 
 
 def llm_chat(model: str, messages: list, temperature: float = 0.6,
