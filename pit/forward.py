@@ -35,7 +35,10 @@ def _today() -> str:
 # same freedom, different reasoning. Override with env if you like.
 _RONIN_MODEL = os.getenv("PIT_RONIN_MODEL",
                          "openrouter:nvidia/nemotron-3-super-120b-a12b:free")
-_VIPER_MODEL = os.getenv("PIT_VIPER_MODEL", "openrouter:minimax/minimax-m3:free")
+# A finance-tuned model vs. a general frontier model — a real experiment in
+# whether domain specialization actually helps here.
+_VIPER_MODEL = os.getenv("PIT_VIPER_MODEL",
+                         "openrouter:inclusionai/ling-3.0-flash-fin:free")
 
 AUTONOMOUS_SEED = [
     ("RONIN", {"mode": "autonomous", "notes": "", "model": _RONIN_MODEL}),

@@ -70,6 +70,54 @@ def quote(ticker: str) -> dict | None:
     return None
 
 
+_FUNDAMENTALS_TTL = 6 * 3600  # company fundamentals barely move intraday
+_FUNDAMENTALS_CACHE: dict[str, tuple[float, dict | None]] = {}
+
+
+def fundamentals(ticker: str) -> dict | None:
+    """Key valuation/growth metrics for a ticker (free, via yfinance). Not a
+    per-tick quote — cached for hours since P/E, margins etc. don't move
+    intraday. Returns None if the ticker has no fundamentals (e.g. some
+    micro-caps, crypto-proxies with no earnings)."""
+    import time
+    t = ticker.upper().strip()
+    cached = _FUNDAMENTALS_CACHE.get(t)
+    if cached and time.time() - cached[0] < _FUNDAMENTALS_TTL:
+        return cached[1]
+    try:
+        import yfinance as yf
+        info = yf.Ticker(t).info
+        if not info or not info.get("regularMarketPrice") and not info.get("currentPrice"):
+            # yfinance still returns a near-empty dict for delisted/invalid symbols
+            if len(info) < 5:
+                _FUNDAMENTALS_CACHE[t] = (time.time(), None)
+                return None
+        result = {
+            "ticker": t,
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+            "market_cap": info.get("marketCap"),
+            "trailing_pe": info.get("trailingPE"),
+            "forward_pe": info.get("forwardPE"),
+            "profit_margin_pct": _pct(info.get("profitMargins")),
+            "revenue_growth_pct": _pct(info.get("revenueGrowth")),
+            "earnings_growth_pct": _pct(info.get("earningsGrowth")),
+            "return_on_equity_pct": _pct(info.get("returnOnEquity")),
+            "debt_to_equity": info.get("debtToEquity"),
+            "analyst_target_price": info.get("targetMeanPrice"),
+            "analyst_recommendation": info.get("recommendationKey"),
+        }
+        _FUNDAMENTALS_CACHE[t] = (time.time(), result)
+        return result
+    except Exception:
+        _FUNDAMENTALS_CACHE[t] = (time.time(), None)
+        return None
+
+
+def _pct(v) -> float | None:
+    return round(v * 100, 2) if isinstance(v, (int, float)) else None
+
+
 def movers(n: int = 12, reference: list[str] | None = None) -> dict:
     if _use_alpaca():
         m = _alpaca_movers(n)
