@@ -68,16 +68,23 @@ def _load_tickers(tickers: list[str], day: date) -> dict:
     return series
 
 
+# A reliably-liquid ticker used ONLY to anchor the sim clock to the real full
+# trading session — never as a trade suggestion. An arbitrary randomly-sampled
+# ticker is a bad anchor: some stocks trade in a narrow window or have sparse
+# 5-min bars (a handful of bars covering a couple hours, not the full ~6.5h
+# session), which silently truncates and skews the whole day's clock.
+_CLOCK_ANCHOR_TICKER = "SPY"
+
+
 def start(tickers: list[str] | None = None, day: date | None = None,
           compress_minutes: int | None = None) -> None:
     """Begin replaying `day`, compressing the session into `compress_minutes`
     of wall clock. Monkey-patches market.quote so all callers see replay prices.
 
-    With no `tickers` given (the unbiased default), the sim clock isn't set
-    here — it's impossible to know the right time window without a single real
-    bar series to anchor it to. It's set lazily from whichever ticker an agent
-    asks about FIRST (see `_ensure_clock`), so the clock always matches the
-    real timestamps Yahoo actually returns."""
+    The sim clock is anchored to SPY's own bar range for the day (always a
+    full, clean session) rather than whatever ticker an agent happens to look
+    up first — that used to occasionally pin the whole session's clock to a
+    thinly-traded stock's narrow, sparse data window."""
     global _ORIGINAL_QUOTE, _ORIGINAL_SCAN
     day = day or _last_trading_day()
     series = load_day(tickers, day)
@@ -88,7 +95,12 @@ def start(tickers: list[str] | None = None, day: date | None = None,
                    "compress_minutes": compress,
                    "sim_start": None, "sim_end": None,
                    "start_wall": None, "speed": None})
-    if series:  # tickers were given upfront -> anchor the clock right away
+
+    anchor = _load_tickers([_CLOCK_ANCHOR_TICKER], day).get(_CLOCK_ANCHOR_TICKER)
+    if anchor and len(anchor) >= 10:  # sanity check: a real full session
+        _STATE["series"][_CLOCK_ANCHOR_TICKER] = anchor
+        _anchor_clock(anchor[0][0], anchor[-1][0])
+    elif series:  # SPY somehow failed; fall back to whatever was given upfront
         first = next(iter(series.values()))
         _anchor_clock(first[0][0], first[-1][0])
 
