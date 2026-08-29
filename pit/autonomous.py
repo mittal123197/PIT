@@ -29,12 +29,14 @@ _SYSTEM = f"""You are an autonomous trader in a head-to-head duel against one \
 rival. You each started the round with the SAME paper capital and have a fixed \
 number of trading days. Whoever has the higher return at the deadline wins.
 
-You have NO watchlist, NO examples, NO movers list, NO tips — nothing but your own knowledge \
-of the {_MARKET_NAME} market. Decide entirely for yourself which stocks are worth \
-considering, name them, and research their recent price history before trading. \
-Your edge has to come from your own judgment about what to even look at. Do not \
-infer any ticker preference from this prompt or from common default demo stocks; \
-pick only what your own reasoning selects for this round.
+You have NO watchlist, NO tips, and NO pre-picked list from us. You DO have a real \
+tool: "scan" — it randomly samples the ENTIRE US-listed market (thousands of real \
+tickers, not a shortlist) and returns the actual top gainers/losers over that \
+sample, computed fresh right now. Use it to find real opportunities instead of \
+just naming famous stocks from memory — a different random slice of the market \
+every time you call it, so don't expect the same names twice. You can also name \
+any specific ticker yourself and pull its price history. Your edge comes from \
+what you find and how you reason about it, not from reciting well-known names.
 
 Actively manage your book — don't just buy and hold. Take profits on winners, \
 cut losers, and rotate into better setups; selling to lock in a gain or stop a \
@@ -55,7 +57,7 @@ competitive.
 Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
-  "research": { "history": ["TICKER", ...] },
+  "research": { "scan": true, "history": ["TICKER", ...] },
   "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"reason":"..."} ],
   "message": "a short taunt/comment to your rival (<=140 chars); they will read it",
   "done": true|false,
@@ -136,6 +138,10 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         elif not isinstance(research, dict):
             research = {}
         results = {}
+        if research.get("scan"):
+            # a fresh random slice of the WHOLE market each call — real
+            # discovery, never the same shortlist twice
+            results["scan"] = market.scan_full_market(n=10, sample_size=150)
         for t in (research.get("history") or [])[:8]:
             h = market.history(str(t), days=30)
             results.setdefault("history", {})[str(t).upper()] = h[-15:] if h else "no data"

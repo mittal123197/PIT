@@ -83,6 +83,24 @@ def is_trading_day(date: datetime.date | None = None) -> bool:
     return date.weekday() < 5
 
 
+def scan_full_market(n: int = 12, sample_size: int = 150,
+                     seed: int | None = None) -> dict:
+    """Real discovery: rank actual price movement over a random sample drawn
+    from the ENTIRE US-listed market (thousands of tickers), not a hand-picked
+    shortlist. This is what makes an agent's first move data-driven instead of
+    "recall a famous name from training data" — see full_market.py."""
+    from . import full_market
+    sample = full_market.random_sample(sample_size, seed=seed)
+    if not sample:
+        return {"gainers": [], "losers": [],
+                "note": "full-market universe unreachable; ticker discovery "
+                        "unavailable this call"}
+    result = _yf_movers(n, reference=sample)
+    result["universe_size"] = full_market.universe_size()
+    result["sampled"] = len(sample)
+    return result
+
+
 # ---- Alpaca backend (real-time US via IEX) ----------------------------
 
 def _alpaca_get(path: str):

@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta
 from . import market
 
 _ORIGINAL_QUOTE = None
+_ORIGINAL_SCAN = None
 _STATE: dict = {}
 
 
@@ -77,7 +78,7 @@ def start(tickers: list[str] | None = None, day: date | None = None,
     bar series to anchor it to. It's set lazily from whichever ticker an agent
     asks about FIRST (see `_ensure_clock`), so the clock always matches the
     real timestamps Yahoo actually returns."""
-    global _ORIGINAL_QUOTE
+    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN
     day = day or _last_trading_day()
     series = load_day(tickers, day)
     compress = compress_minutes or int(os.getenv("PIT_REPLAY_MINUTES", "20"))
@@ -93,7 +94,9 @@ def start(tickers: list[str] | None = None, day: date | None = None,
 
     if _ORIGINAL_QUOTE is None:
         _ORIGINAL_QUOTE = market.quote
+        _ORIGINAL_SCAN = market.scan_full_market
     market.quote = _replay_quote  # type: ignore
+    market.scan_full_market = _replay_scan  # type: ignore
     print(f"[replay] unbiased ticker discovery for {day}: agents name symbols; "
           f"bars load on demand, session compressed to ~{compress} wall-clock "
           f"minutes (clock starts on the first ticker looked up).", flush=True)
@@ -112,10 +115,12 @@ def _anchor_clock(sim_start: datetime, sim_end: datetime) -> None:
 
 
 def stop() -> None:
-    global _ORIGINAL_QUOTE
+    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN
     if _ORIGINAL_QUOTE is not None:
         market.quote = _ORIGINAL_QUOTE
+        market.scan_full_market = _ORIGINAL_SCAN
         _ORIGINAL_QUOTE = None
+        _ORIGINAL_SCAN = None
     _STATE.clear()
 
 
@@ -146,16 +151,54 @@ def _replay_quote(ticker: str) -> dict | None:
     now = sim_now()
     if not series or not now:
         return _ORIGINAL_QUOTE(ticker) if _ORIGINAL_QUOTE else None
-    # find the latest bar with time <= sim_now
+    price = _price_at(series, now)
+    prev = series[0][1]
+    return {"ticker": t, "price": price, "prev_close": prev,
+            "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0,
+            "asof": now.strftime("%H:%M")}
+
+
+def _price_at(series: list[tuple[datetime, float]], now: datetime) -> float:
+    """The latest bar price at or before `now`; falls back to the first bar."""
     price = None
     for dt, p in series:
         if dt.replace(tzinfo=None) <= now.replace(tzinfo=None):
             price = p
         else:
             break
-    if price is None:
-        price = series[0][1]
-    prev = series[0][1]
-    return {"ticker": t, "price": price, "prev_close": prev,
-            "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0,
-            "asof": now.strftime("%H:%M")}
+    return price if price is not None else series[0][1]
+
+
+def _replay_scan(n: int = 12, sample_size: int = 150,
+                 seed: int | None = None) -> dict:
+    """scan_full_market, but sourced from the REPLAY day, not today — so an
+    agent's discovery stays inside the timeline it's actually trading in.
+    A random sample each call, same as the live version."""
+    from . import full_market
+    day = _STATE.get("day")
+    if not day:
+        return {"gainers": [], "losers": [], "note": "replay not active"}
+    sample = full_market.random_sample(sample_size, seed=seed)
+    if not sample:
+        return {"gainers": [], "losers": [],
+                "note": "full-market universe unreachable this call"}
+    got = _load_tickers(sample, day)
+    for t, series in got.items():  # warm the cache for later single lookups
+        _STATE.setdefault("series", {})[t] = series
+    if _STATE.get("start_wall") is None and got:
+        first = next(iter(got.values()))
+        _anchor_clock(first[0][0], first[-1][0])
+
+    now = sim_now()
+    rows = []
+    for t, series in got.items():
+        if len(series) < 2 or not now:
+            continue
+        price = _price_at(series, now)
+        first_price = series[0][1]
+        if first_price:
+            rows.append({"ticker": t, "price": round(price, 2),
+                        "change_pct": round((price / first_price - 1) * 100, 2)})
+    rows.sort(key=lambda r: r["change_pct"], reverse=True)
+    return {"gainers": rows[:n], "losers": list(reversed(rows[-n:])),
+            "universe_size": full_market.universe_size(), "sampled": len(sample)}
