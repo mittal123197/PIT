@@ -178,11 +178,13 @@ def cmd_live(args):
         interval = args.interval if args.interval != 900 else max(60, args.compress * 60 // 5)
         try:
             live.run_live(conn, minutes=args.compress + 1,
-                          interval=interval, refresh=args.refresh)
+                          interval=interval, refresh=args.refresh,
+                          debug=args.debug)
         finally:
             replay.stop()
     else:
-        live.run_live(conn, minutes=args.minutes, interval=args.interval)
+        live.run_live(conn, minutes=args.minutes, interval=args.interval,
+                      debug=args.debug)
 
 
 def cmd_forward_status(args):
@@ -357,6 +359,9 @@ def main(argv=None):
                     help="replay: wall-clock minutes for the full session (default 20)")
     lv.add_argument("--refresh", type=int, default=10,
                     help="seconds between price/P&L marks (default 10)")
+    lv.add_argument("--debug", action="store_true",
+                    help="record every thought, tool call, and research result "
+                         "per decision to the audit log (visible on /live)")
     lv.set_defaults(func=cmd_live)
 
     ph = sub.add_parser("history", help="show round results / trades")

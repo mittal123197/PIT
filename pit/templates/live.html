@@ -144,6 +144,55 @@
       first taunts land after the opening tick.</p>
   {% endif %}
 </div>
+
+{% if audit %}
+<div class="sec"><div class="eyebrow">Agent audit log (debug mode)</div>
+  <div class="subtitle">Every turn each agent took — its own thoughts, which
+    research tools it called, and the final action if that turn decided one.
+    Newest first.</div></div>
+<div class="panel" style="padding:0;">
+  {% for a in audit %}
+    <div style="padding:14px 18px;{% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="dot" style="background:{{ a.lineage_id|lcolor }};"></span>
+        <span class="agentname" style="font-size:13px;color:{{ a.lineage_id|lcolor }};">{{ a.name }}</span>
+        <span class="mono muted" style="font-size:10px;">{{ a.ts[11:19] if 'T' in a.ts else a.ts }}</span>
+        <span class="pill status">turn {{ a.turn }}</span>
+        {% if a.model %}<span class="pill status">{{ a.model.split('/')[-1].replace(':free','') }}</span>{% endif %}
+        {% for t in a.tools_used %}<span class="pill reason">{{ t }}</span>{% endfor %}
+        {% if a.done %}<span class="pill win">final action</span>{% endif %}
+      </div>
+      {% if a.thoughts %}
+        <div style="font-size:13px;color:var(--ink-soft);margin-top:8px;font-style:italic;">
+          "{{ a.thoughts }}"</div>
+      {% endif %}
+      {% if a.research_requested %}
+        <div style="margin-top:6px;font-size:11.5px;color:var(--phase);">
+          requested: {{ a.research_requested }}</div>
+      {% endif %}
+      {% if a.done and a.orders %}
+        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
+          {% for o in a.orders %}
+            <span class="pill {{ 'win' if o.side == 'buy' else 'lose' }}">
+              {{ o.side }} {{ o.ticker }}</span>
+          {% endfor %}
+        </div>
+      {% elif a.done %}
+        <div class="muted" style="margin-top:6px;font-size:12px;">held — no orders</div>
+      {% endif %}
+      {% if a.message %}
+        <div style="margin-top:6px;font-size:12.5px;color:var(--ink-soft);">
+          💬 "{{ a.message }}"</div>
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+{% elif data and data.is_live %}
+<div class="sec"><div class="eyebrow">Agent audit log</div></div>
+<p class="muted" style="font-size:13px;">Not recording — start with
+  <span class="mono">pit live --replay --debug</span> to see every thought,
+  tool call, and research result behind each action.</p>
+{% endif %}
 {% endif %}
 
 {% endblock %}

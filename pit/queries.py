@@ -301,6 +301,36 @@ def latest_head_to_head(conn: sqlite3.Connection) -> dict | None:
     return round_detail(conn, row["id"]) if row else None
 
 
+def audit_log(conn: sqlite3.Connection, round_id: int, limit: int = 300) -> list[dict]:
+    """Every recorded decision turn (debug mode only) for a round: thoughts,
+    which research tools were used, what came back, and the final action if
+    that turn was the decision's last. Newest first."""
+    rows = _rows(conn.execute(
+        """SELECT a.*, l.name, l.id AS lineage_id
+           FROM agent_audit a
+           JOIN agents ag ON ag.id = a.agent_id
+           JOIN lineages l ON l.id = ag.lineage_id
+           WHERE a.round_id=? ORDER BY a.id DESC LIMIT ?""",
+        (round_id, limit)))
+    for r in rows:
+        for field in ("research_requested", "research_results", "orders"):
+            if r.get(field):
+                try:
+                    r[field] = json.loads(r[field])
+                except (TypeError, ValueError):
+                    pass
+        r["tools_used"] = [k for k in ("scan", "history", "fundamentals")
+                           if isinstance(r.get("research_requested"), dict)
+                           and r["research_requested"].get(k)]
+    return rows
+
+
+def has_audit_log(conn: sqlite3.Connection, round_id: int) -> bool:
+    return bool(conn.execute(
+        "SELECT 1 FROM agent_audit WHERE round_id=? LIMIT 1", (round_id,)
+    ).fetchone())
+
+
 def guidelines_overview(conn: sqlite3.Connection) -> dict:
     active = _rows(conn.execute(
         "SELECT * FROM guidelines WHERE status='active' ORDER BY id"))

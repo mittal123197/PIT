@@ -18,6 +18,28 @@ from . import guidelines as gmod
 from .config import CURRENCY, DEFAULT, MARKET, ArenaConfig
 
 
+def _persist_audit(conn, round_id, agent_id, trace: list[dict]) -> None:
+    """Write every turn of a decision (thoughts, tools used, results, final
+    action) to `agent_audit`, for the debug-mode audit log on /live."""
+    ts = forward._now()
+    for step in trace:
+        conn.execute(
+            """INSERT INTO agent_audit
+               (round_id, agent_id, ts, turn, model, thoughts,
+                research_requested, research_results, done, orders, message,
+                raw_response)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (round_id, agent_id, ts, step["turn"], step.get("model"),
+             step.get("thoughts"),
+             json.dumps(step.get("research_requested")) if step.get("research_requested") is not None else None,
+             json.dumps(step.get("research_results")) if step.get("research_results") is not None else None,
+             int(step.get("done") or False),
+             json.dumps(step.get("orders")) if step.get("orders") is not None else None,
+             step.get("message"),
+             json.dumps(step.get("raw_response")) if step.get("raw_response") is not None else None))
+    conn.commit()
+
+
 def _price_fn():
     cache: dict[str, float | None] = {}
 
@@ -31,10 +53,16 @@ def _price_fn():
 
 def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
              interval: int = 900, refresh: int | None = None,
-             verbose: bool = True) -> dict:
+             verbose: bool = True, debug: bool = False) -> dict:
     """LLM *decisions* every `interval`s; cheap price/P&L *marks* every
-    `refresh`s so the scoreboard moves continuously between decisions."""
+    `refresh`s so the scoreboard moves continuously between decisions.
+
+    debug=True persists every research turn (thoughts, tools used, results,
+    final action) to `agent_audit` — see pit.autonomous.decide's `trace`."""
     refresh = refresh or int(os.getenv("PIT_MARK_REFRESH", "120"))
+    if debug and verbose:
+        print("[debug] full decision audit trail enabled — every thought, "
+              "tool call, and action will be recorded.", flush=True)
     rnd = forward._active_round(conn)
     if not rnd:
         forward.start_round(conn, config, days=0)  # 0 = time-based; no day-resolve
@@ -53,7 +81,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         try:
             if now >= decision_due:
                 decision += 1
-                _tick(conn, config, rnd, decision, verbose)
+                _tick(conn, config, rnd, decision, verbose, debug)
                 decision_due = time.time() + interval
             else:
                 _refresh_marks(conn, config, rnd, verbose)
@@ -97,7 +125,7 @@ def _refresh_marks(conn, config, rnd, verbose):
               flush=True)
 
 
-def _tick(conn, config, rnd, tick, verbose):
+def _tick(conn, config, rnd, tick, verbose, debug=False):
     price = _price_fn()
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
@@ -138,8 +166,10 @@ def _tick(conn, config, rnd, tick, verbose):
             "notes": cfg.get("notes", ""),
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid),
         }
-        orders, notes, message = autonomous.decide(
+        orders, notes, message, trace = autonomous.decide(
             view, tick, 0, rnd["goal_pct"], guidelines, model=cfg.get("model"))
+        if debug:
+            _persist_audit(conn, rnd["id"], aid, trace)
         n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts)
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
@@ -163,6 +193,13 @@ def _tick(conn, config, rnd, tick, verbose):
                       flush=True)
             if message:
                 print(f"         💬 \"{message}\"", flush=True)
+            if debug:
+                for step in trace:
+                    tools = ", ".join(k for k in ("scan", "history", "fundamentals")
+                                      if (step.get("research_requested") or {}).get(k))
+                    print(f"         [debug] turn {step['turn']}"
+                          f"{' · tools: ' + tools if tools else ''}: "
+                          f"{step.get('thoughts','')[:100]}", flush=True)
 
 
 def _standings(conn, rnd, verbose) -> dict:

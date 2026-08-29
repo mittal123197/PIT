@@ -86,10 +86,31 @@ instead of amount_inr."""
 
 def decide(view: dict, day: int, total_days: int, goal_pct: float,
            guidelines: list[str], model: str | None = None
-           ) -> tuple[list[dict], str, str]:
-    """Run the research→decide loop. Returns (orders, updated_notes, message)."""
+           ) -> tuple[list[dict], str, str, list[dict]]:
+    """Run the research→decide loop.
+
+    Returns (orders, updated_notes, message, trace) — `trace` is a full audit
+    log of every turn (thoughts, tools requested, what came back, and the
+    final action), independent of debug mode: it's cheap to build, and the
+    caller decides whether to persist it. See pit.live / pit.forward for how
+    it's written to `agent_audit` when debug mode is on.
+    """
+    trace: list[dict] = []
+
+    def _log(turn, active_model, data, requested=None, results=None) -> None:
+        trace.append({
+            "turn": turn, "model": active_model,
+            "thoughts": str((data or {}).get("thoughts", ""))[:500],
+            "research_requested": requested,
+            "research_results": results,
+            "done": bool((data or {}).get("done")),
+            "orders": (data or {}).get("orders") if (data or {}).get("done") else None,
+            "message": (data or {}).get("message") if (data or {}).get("done") else None,
+            "raw_response": data,
+        })
+
     if not groq_available():
-        return [], view.get("notes", ""), ""
+        return [], view.get("notes", ""), "", trace
 
     model = model or DEFAULT_MODEL
     context = {
@@ -131,17 +152,24 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
                     if attempt == 1 and groq_available():
                         active_model = DEFAULT_MODEL
                     continue
+                trace.append({"turn": turn + 1, "model": active_model,
+                              "thoughts": f"[llm-error {type(exc).__name__}]",
+                              "research_requested": None, "research_results": None,
+                              "done": True, "orders": None, "message": None,
+                              "raw_response": None})
                 return (_clean_orders([]),
-                        view.get("notes", "") + f" [llm-error {type(exc).__name__}]", "")
+                        view.get("notes", "") + f" [llm-error {type(exc).__name__}]",
+                        "", trace)
         if data is None:
-            return [], view.get("notes", ""), ""
+            return [], view.get("notes", ""), "", trace
         if not isinstance(data, dict):        # some models wrap in a list
             data = {"orders": data} if isinstance(data, list) else {}
 
         if data.get("done") or force:
+            _log(turn + 1, active_model, data)
             return (_clean_orders(data.get("orders", [])),
                     str(data.get("notes", ""))[:600],
-                    str(data.get("message", ""))[:200])
+                    str(data.get("message", ""))[:200], trace)
 
         # otherwise: fulfil the research request and loop
         research = data.get("research") or {}
@@ -162,11 +190,12 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         for t in (research.get("fundamentals") or [])[:5]:
             f = market.fundamentals(str(t))
             results.setdefault("fundamentals", {})[str(t).upper()] = f or "no data"
+        _log(turn + 1, active_model, data, requested=research, results=results)
         messages.append({"role": "assistant", "content": json.dumps(data)})
         messages.append({"role": "user",
                          "content": json.dumps({"research_results": results})})
 
-    return [], view.get("notes", ""), ""
+    return [], view.get("notes", ""), "", trace
 
 
 def _clean_orders(orders: list) -> list[dict]:

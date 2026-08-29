@@ -69,7 +69,8 @@ def live_view():
     conn = _conn()
     data = q.live_view(conn)
     trades = q.trade_analysis(conn, data["round"]["id"]) if data else None
-    return render_template("live.html", data=data, trades=trades)
+    audit = q.audit_log(conn, data["round"]["id"]) if data else None
+    return render_template("live.html", data=data, trades=trades, audit=audit)
 
 
 @app.route("/round/<int:round_id>")

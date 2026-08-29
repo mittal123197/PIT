@@ -112,7 +112,8 @@ def _active_round(conn):
 # ---- stepping one real trading day ------------------------------------
 
 def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
-               trade_date: str | None = None, verbose: bool = True) -> dict:
+               trade_date: str | None = None, verbose: bool = True,
+               debug: bool = False) -> dict:
     """Process one trading day for the active live round. Idempotent per date."""
     rnd = _active_round(conn)
     if not rnd:
@@ -176,9 +177,12 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
             "notes": cfg.get("notes", ""),
         }
         view["rival_messages"] = _recent_messages(conn, rnd["id"], aid)
-        orders, notes, message = autonomous.decide(
+        orders, notes, message, trace = autonomous.decide(
             view, day_index, rnd["length_days"], rnd["goal_pct"], guidelines,
             model=cfg.get("model"))
+        if debug:
+            from .live import _persist_audit
+            _persist_audit(conn, rnd["id"], aid, trace)
         n_exec = _execute(conn, rnd["id"], aid, st, orders, price, date)
         if message:
             conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "

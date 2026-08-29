@@ -144,6 +144,27 @@ CREATE TABLE IF NOT EXISTS guideline_votes (
     UNIQUE (proposal_id, lineage_id)
 );
 
+-- Full audit trail of every LLM turn an agent takes, behind debug mode
+-- (PIT_DEBUG=1 / `pit live --debug`). One row per research-or-decide turn, so
+-- a single fill can be traced back through every tool call and thought that
+-- led to it, not just its final "reason" string.
+CREATE TABLE IF NOT EXISTS agent_audit (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id            INTEGER NOT NULL REFERENCES rounds(id),
+    agent_id            INTEGER NOT NULL REFERENCES agents(id),
+    ts                  TEXT NOT NULL,
+    turn                INTEGER NOT NULL,       -- 1, 2, 3... within one decision
+    model               TEXT,
+    thoughts            TEXT,                   -- the agent's own "thoughts" field
+    research_requested  TEXT,                   -- JSON: {"scan":true,"history":[...],...}
+    research_results    TEXT,                   -- JSON: what came back
+    done                INTEGER NOT NULL DEFAULT 0,  -- 1 = this turn's action was final
+    orders              TEXT,                   -- JSON: orders, if done
+    message             TEXT,                   -- taunt message, if done
+    raw_response        TEXT                    -- the full raw LLM JSON for this turn
+);
+CREATE INDEX IF NOT EXISTS idx_audit_round ON agent_audit(round_id, id);
+
 -- Agent-to-agent messages (banter / mocking) during a live session. Each agent
 -- sees the rival's recent messages in its next decision, so a rivalry develops.
 CREATE TABLE IF NOT EXISTS agent_messages (
