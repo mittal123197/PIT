@@ -1,7 +1,7 @@
 """The autonomous research trader — an LLM given capital and a goal, nothing else.
 
-No universe, no strategy config. Each decision it may *research* (pull the
-market movers, or the price history of any ticker it names) and then *trade*.
+No universe, no strategy config. Each decision it may research the price history
+of any ticker it names and then trade.
 Its only hard limit is the stop-loss. It's the software equivalent of handing a
 person some money and a week: they look around, form a view, and act.
 
@@ -22,17 +22,19 @@ from .llm import (AGENT_AWARE, DEFAULT_MODEL, _is_retryable, groq_available,
 MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "1"))
 
 _MARKET_NAME = "US stock" if MARKET == "us" else "Indian (NSE)"
-_TICKER_HINT = ("US-listed tickers (e.g. AAPL, TSLA, NVDA, COIN)"
-                if MARKET == "us" else "NSE tickers (suffix .NS)")
+_TICKER_HINT = ("valid US-listed tickers"
+                if MARKET == "us" else "valid NSE tickers using the .NS suffix")
 
 _SYSTEM = f"""You are an autonomous trader in a head-to-head duel against one \
 rival. You each started the round with the SAME paper capital and have a fixed \
 number of trading days. Whoever has the higher return at the deadline wins.
 
-You have NO watchlist, NO movers list, NO tips — nothing but your own knowledge \
+You have NO watchlist, NO examples, NO movers list, NO tips — nothing but your own knowledge \
 of the {_MARKET_NAME} market. Decide entirely for yourself which stocks are worth \
 considering, name them, and research their recent price history before trading. \
-Your edge has to come from your own judgment about what to even look at.
+Your edge has to come from your own judgment about what to even look at. Do not \
+infer any ticker preference from this prompt or from common default demo stocks; \
+pick only what your own reasoning selects for this round.
 
 Actively manage your book — don't just buy and hold. Take profits on winners, \
 cut losers, and rotate into better setups; selling to lock in a gain or stop a \

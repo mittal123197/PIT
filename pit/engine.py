@@ -389,10 +389,12 @@ class Engine:
         self.conn.execute("UPDATE agents SET rating=? WHERE id=?", (nw, winner_id))
         self.conn.execute("UPDATE agents SET rating=? WHERE id=?", (nl, loser_id))
 
-        # stake shift + cumulative return + W/L
-        d = self.config.stake_delta_pct / 100.0
-        self._apply_lineage_result(win_lin, winner_return, won=True, stake_mult=1 + d)
-        self._apply_lineage_result(lose_lin, loser_return, won=False, stake_mult=1 - d)
+        # stake shift + cumulative return + W/L (asymmetric: winning pays more
+        # than losing costs)
+        wd = self.config.win_stake_bonus_pct / 100.0
+        ld = self.config.loss_stake_penalty_pct / 100.0
+        self._apply_lineage_result(win_lin, winner_return, won=True, stake_mult=1 + wd)
+        self._apply_lineage_result(lose_lin, loser_return, won=False, stake_mult=1 - ld)
 
         self.conn.execute(
             """INSERT INTO round_results

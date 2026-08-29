@@ -81,7 +81,10 @@ class ArenaConfig:
     # --- capital & risk (set once at round start, never touched by the agent) ---
     base_capital: float = _env_float("PIT_BASE_CAPITAL", 100_000.0)  # ₹ paper
     stop_loss_pct: float = _env_float("PIT_STOP_LOSS_PCT", 10.0)      # hard constraint
-    stake_delta_pct: float = _env_float("PIT_STAKE_DELTA_PCT", 20.0)  # winner +, loser -
+    # Asymmetric on purpose: winning is rewarded slightly more than losing is
+    # punished (25% up vs 20% down), so a lineage can claw back from one loss.
+    win_stake_bonus_pct: float = _env_float("PIT_WIN_STAKE_BONUS_PCT", 25.0)
+    loss_stake_penalty_pct: float = _env_float("PIT_LOSS_STAKE_PENALTY_PCT", 20.0)
 
     # --- round length (see build plan: 7-day rounds, shrink to a 4-day floor) ---
     start_round_days: int = _env_int("PIT_START_ROUND_DAYS", 7)

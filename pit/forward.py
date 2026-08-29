@@ -301,9 +301,10 @@ def _resolve(conn, rnd, config, price) -> dict:
     conn.execute("UPDATE agents SET rating=? WHERE id=?", (nw, winner_id))
     conn.execute("UPDATE agents SET rating=? WHERE id=?", (nl, loser_id))
 
-    d = config.stake_delta_pct / 100.0
-    _apply_lineage(conn, wa["lineage_id"], summaries[winner_id].return_pct, True, 1 + d)
-    _apply_lineage(conn, la["lineage_id"], summaries[loser_id].return_pct, False, 1 - d)
+    wd = config.win_stake_bonus_pct / 100.0
+    ld = config.loss_stake_penalty_pct / 100.0
+    _apply_lineage(conn, wa["lineage_id"], summaries[winner_id].return_pct, True, 1 + wd)
+    _apply_lineage(conn, la["lineage_id"], summaries[loser_id].return_pct, False, 1 - ld)
 
     conn.execute(
         """INSERT INTO round_results (round_id, winner_agent_id, loser_agent_id,
