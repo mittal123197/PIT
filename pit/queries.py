@@ -105,11 +105,21 @@ def round_detail(conn: sqlite3.Connection, round_id: int) -> dict | None:
            WHERE rr.round_id=?""",
         (round_id,),
     ).fetchone()
+    rankings = _rows(conn.execute(
+        """SELECT rr.rank, rr.return_pct, rr.note, rr.stake_mult, rr.rating_delta,
+                  l.name AS lineage, l.id AS lineage_id
+           FROM round_rankings rr
+           JOIN agents a ON a.id = rr.agent_id
+           JOIN lineages l ON l.id = a.lineage_id
+           WHERE rr.round_id=? ORDER BY rr.rank""",
+        (round_id,),
+    ))
     return {
         "round": rnd,
         "states": states,
         "trades": trades,
         "result": dict(result) if result else None,
+        "rankings": rankings,  # full N-way placement; empty for old pre-feature rounds
     }
 
 
@@ -204,7 +214,7 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
         a["ret"] = ret
     agents.sort(key=lambda x: x["ret"], reverse=True)
     messages = _rows(conn.execute(
-        """SELECT m.ts, m.message, l.name, l.id AS lineage_id
+        """SELECT m.ts, m.message, m.kind, l.name, l.id AS lineage_id
            FROM agent_messages m JOIN agents a ON a.id = m.agent_id
            JOIN lineages l ON l.id = a.lineage_id
            WHERE m.round_id=? ORDER BY m.id""", (r["id"],)))
@@ -335,7 +345,7 @@ def guidelines_overview(conn: sqlite3.Connection) -> dict:
     active = _rows(conn.execute(
         "SELECT * FROM guidelines WHERE status='active' ORDER BY id"))
     proposals = _rows(conn.execute(
-        """SELECT p.id, p.kind, p.proposed_text, p.resolution,
+        """SELECT p.id, p.kind, p.practice, p.proposed_text, p.resolution,
                   SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
            FROM guideline_proposals p
            LEFT JOIN guideline_votes v ON v.proposal_id = p.id

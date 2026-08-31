@@ -46,12 +46,108 @@
 
 {% if result %}
 <p class="muted" style="margin:-8px 0 26px;font-size:13px;">
-  Resolved by <span class="pill reason">{{ result.resolution_reason }}</span>
+  {% if result.both_stopped_out %}
+    <span class="pill lose">double stop-out</span> both sides got liquidated —
+    {{ result.winner }} was merely less bad, not good —
+  {% elif result.passive_win %}
+    <span class="pill status">passive win</span> {{ result.winner }} made ZERO
+    trades — stake bonus was capped, this wasn't earned by beating the rival's
+    trading —
+  {% else %}
+    Resolved by <span class="pill reason">{{ result.resolution_reason }}</span>
+  {% endif %}
   — ELO shifted {{ '%.1f'|format(result.rating_delta) }} points.
 </p>
+
+<div class="eyebrow">What was learned</div>
+{% if rankings and rankings|length > 2 %}
+  <div class="subtitle" style="margin:-4px 0 16px;">Every participant this round, ranked —
+    only 1st truly won; everyone else is a loser and self-critiqued into a new
+    generation, but only dead-last took the full stake penalty.</div>
+  <div class="panel" style="padding:0;margin-bottom:26px;">
+    {% for r in rankings %}
+      <div style="padding:16px 20px;{% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
+        <h2 style="display:flex;align-items:center;gap:8px;margin:0 0 8px;">
+          <span class="dot" style="background:{{ r.lineage_id|lcolor }};"></span>
+          <a href="/lineage/{{ r.lineage_id }}" class="agentname">{{ r.lineage }}</a>
+          <span class="pill {{ 'win' if r.rank == 1 else 'lose' }}">
+            #{{ r.rank }}{% if r.rank == 1 %} · winner{% elif loop.last %} · last{% else %} · middle{% endif %}</span>
+          <span class="mono muted" style="font-size:12px;margin-left:auto;">
+            {{ r.return_pct|pct }} · stake ×{{ '%.2f'|format(r.stake_mult) }}
+            · ELO {{ '%+.1f'|format(r.rating_delta) }}</span>
+        </h2>
+        <p style="margin:0;font-size:13.5px;color:var(--ink-soft);">{{ r.note or '—' }}</p>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="grid2" style="margin-bottom:26px;">
+    <div class="panel" style="margin-bottom:0;">
+      <h2>{{ result.winner }} {{ 'self-critiques' if result.both_stopped_out else 'reinforces' }}
+        <span class="pill {{ 'lose' if result.both_stopped_out else 'win' }}" style="margin-left:6px;">
+          {{ 'stopped out' if result.both_stopped_out else 'winner' }}</span></h2>
+      <p style="padding:0 20px 16px;font-size:13.5px;color:var(--ink-soft);">
+        {{ result.winner_note or '—' }}</p>
+    </div>
+    <div class="panel" style="margin-bottom:0;">
+      <h2>{{ result.loser }} self-critiques <span class="pill lose" style="margin-left:6px;">loser</span></h2>
+      <p style="padding:0 20px 16px;font-size:13.5px;color:var(--ink-soft);">
+        {{ result.loser_note or '—' }}</p>
+    </div>
+  </div>
+{% endif %}
 {% endif %}
 
-<div class="eyebrow">Trade ledger — {{ trades|length }} fills</div>
+<div class="eyebrow">Completed trades</div>
+<div class="panel">
+  <table>
+    <thead><tr><th>Agent</th><th>Stock</th><th>Buy → Sell</th>
+      <th>Held</th><th>P&amp;L</th><th>Why bought / why sold</th></tr></thead>
+    <tbody>
+    {% for r in trade_stats.round_trips %}
+      <tr>
+        <td class="agentname">{{ r.name }}</td>
+        <td class="mono">{{ r.symbol }} <span class="muted">×{{ '%.0f'|format(r.qty) }}</span></td>
+        <td class="mono">{{ r.buy_price|money }} → {{ r.sell_price|money }}</td>
+        <td class="mono">{{ r.hold }}</td>
+        <td class="mono {{ 'up' if r.pnl_pct >= 0 else 'down' }}">{{ r.pnl_pct|pct }}
+          <span class="muted">({{ r.pnl_amount|money }})</span></td>
+        <td style="font-size:12px;color:var(--ink-soft);max-width:320px;">
+          <div>▸ {{ r.buy_reason or '—' }}</div>
+          <div style="margin-top:3px;">◂ {{ r.sell_reason or '—' }}</div>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="muted" style="padding:18px;">No completed round-trips —
+        positions were still open, or liquidated by a hard stop, at round end.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if trade_stats.open_positions %}
+<div class="eyebrow" style="margin-top:26px;">Positions still held at round end</div>
+<div class="panel">
+  <table>
+    <thead><tr><th>Agent</th><th>Stock</th><th>Qty</th><th>Buy price</th>
+      <th>Held</th><th>Why it bought</th></tr></thead>
+    <tbody>
+    {% for p in trade_stats.open_positions %}
+      <tr>
+        <td class="agentname">{{ p.name }}</td>
+        <td class="mono">{{ p.symbol }}</td>
+        <td class="mono">{{ '%.0f'|format(p.qty) }}</td>
+        <td class="mono">{{ p.avg_price|money }}</td>
+        <td class="mono">{{ p.held }}</td>
+        <td style="font-size:12.5px;color:var(--ink-soft);max-width:340px;">{{ p.reason or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="eyebrow" style="margin-top:26px;">Every fill — {{ trades|length }}</div>
 <div class="panel">
   <table>
     <thead><tr>
@@ -65,7 +161,7 @@
         <td><span class="pill {{ 'win' if t.side == 'buy' else 'lose' }}">{{ t.side }}</span></td>
         <td class="mono">{{ '%.0f'|format(t.qty) }}</td>
         <td class="mono">{{ t.symbol }}</td>
-        <td class="mono">₹{{ '%.2f'|format(t.price) }}</td>
+        <td class="mono">{{ t.price|money }}</td>
         <td class="mono hide-sm">{{ t.capital_after|money }}</td>
         <td class="muted hide-sm" style="font-size:12px;">{{ t.reason or '' }}</td>
       </tr>
@@ -75,5 +171,39 @@
     </tbody>
   </table>
 </div>
+
+{% if audit %}
+<div class="eyebrow" style="margin-top:26px;">Agent audit log (debug mode)</div>
+<div class="panel" style="padding:0;">
+  {% for a in audit %}
+    <div style="padding:14px 18px;{% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span class="dot" style="background:{{ a.lineage_id|lcolor }};"></span>
+        <span class="agentname" style="font-size:13px;color:{{ a.lineage_id|lcolor }};">{{ a.name }}</span>
+        <span class="mono muted" style="font-size:10px;">{{ a.ts[11:19] if 'T' in a.ts else a.ts }}</span>
+        <span class="pill status">turn {{ a.turn }}</span>
+        {% if a.model %}<span class="pill status">{{ a.model.split('/')[-1].replace(':free','') }}</span>{% endif %}
+        {% for t in a.tools_used %}<span class="pill reason">{{ t }}</span>{% endfor %}
+        {% if a.done %}<span class="pill win">final action</span>{% endif %}
+      </div>
+      {% if a.thoughts %}
+        <div style="font-size:13px;color:var(--ink-soft);margin-top:8px;font-style:italic;">
+          "{{ a.thoughts }}"</div>
+      {% endif %}
+      {% if a.done and a.orders %}
+        <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
+          {% for o in a.orders %}
+            <span class="pill {{ 'win' if o.side == 'buy' else 'lose' }}">
+              {{ o.side }} {{ o.ticker }}</span>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted" style="font-size:13px;margin-top:26px;">No audit trail recorded for this
+  round — start a session with <span class="mono">--debug</span> to capture one.</p>
+{% endif %}
 
 {% endblock %}

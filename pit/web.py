@@ -70,7 +70,9 @@ def live_view():
     data = q.live_view(conn)
     trades = q.trade_analysis(conn, data["round"]["id"]) if data else None
     audit = q.audit_log(conn, data["round"]["id"]) if data else None
-    return render_template("live.html", data=data, trades=trades, audit=audit)
+    pool_size = q.arena_summary(conn)["lineages"]
+    return render_template("live.html", data=data, trades=trades, audit=audit,
+                          pool_size=pool_size)
 
 
 @app.route("/round/<int:round_id>")
@@ -79,7 +81,9 @@ def round_view(round_id: int):
     data = q.round_detail(conn, round_id)
     if not data:
         abort(404)
-    return render_template("round.html", **data)
+    trade_stats = q.trade_analysis(conn, round_id)
+    audit = q.audit_log(conn, round_id)
+    return render_template("round.html", trade_stats=trade_stats, audit=audit, **data)
 
 
 @app.route("/lineage/<int:lineage_id>")
