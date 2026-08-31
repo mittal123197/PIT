@@ -67,9 +67,28 @@
 </div>
 
 {% if h2h and h2h.result %}
-{% set a = h2h.states[0] %}{% set b = h2h.states[1] %}
 <div class="sec"><div class="eyebrow">Latest duel — round #{{ h2h.round.round_number }}</div>
-  <div class="subtitle">The most recent head-to-head and how it was decided.</div></div>
+  <div class="subtitle">The most recent round and how it was decided.</div></div>
+{% if h2h.rankings and h2h.rankings|length > 2 %}
+<div class="panel" style="padding:0;">
+  {% for r in h2h.rankings %}
+    <div style="display:flex;align-items:center;gap:10px;padding:12px 18px;
+      {% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
+      <span class="pill {{ 'win' if r.rank == 1 else 'lose' }}">#{{ r.rank }}</span>
+      <span class="dot" style="background:{{ r.lineage_id|lcolor }};"></span>
+      <span class="agentname">{{ r.lineage }}</span>
+      <span class="mono {{ 'up' if r.return_pct >= 0 else 'down' }}"
+        style="margin-left:auto;">{{ r.return_pct|pct }}</span>
+      <span class="mono muted" style="font-size:12px;">stake ×{{ '%.2f'|format(r.stake_mult) }}</span>
+    </div>
+  {% endfor %}
+</div>
+{% else %}
+{# Legacy 2-agent rounds only: look up the actual winner/loser by id — never
+   index states[0]/states[1] positionally, since SQL's ORDER BY doesn't
+   replicate the real resolution's trade-count/drawdown/agent-id tiebreak. #}
+{% set a = (h2h.states | selectattr('agent_id', 'equalto', h2h.result.winner_agent_id) | first) %}
+{% set b = (h2h.states | selectattr('agent_id', 'equalto', h2h.result.loser_agent_id) | first) %}
 <div class="h2h">
   {% set a_win = h2h.result.winner_agent_id == a.agent_id %}
   <div class="side {{ 'winner' if a_win }}">
@@ -92,6 +111,7 @@
     <div class="meta">gen {{ b.generation }} · {{ b.trade_count }} trades · {{ '%.1f'|format(b.max_drawdown_pct) }}% max dd</div>
   </div>
 </div>
+{% endif %}
 <div style="text-align:center;margin-top:10px;">
   <a href="/round/{{ h2h.round.id }}" class="backlink">see this round's full trade ledger →</a>
 </div>
