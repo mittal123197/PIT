@@ -153,10 +153,32 @@ def cmd_forward_step(args):
         return
     if status == "resolved":
         o = res["outcome"]
+        ranking = o.get("ranking") or []
         print(f"\n  Day {res['day']} — ROUND RESOLVED")
-        print(f"  WINNER {o['winner']} {o['winner_return']:+.2f}%  "
-              f"beat {o['loser']} {o['loser_return']:+.2f}% ({o['reason']})")
-        print(f"  mutation → {o['loser']}: {o['mutation_note']}")
+        if o.get("both_stopped_out"):
+            print(f"  DOUBLE STOP-OUT — everyone got liquidated. "
+                  f"{o['winner']} {o['winner_return']:+.2f}% was merely less bad "
+                  f"than the rest ({o['reason']})")
+        elif o.get("passive_win"):
+            print(f"  {o['winner']} wins {o['winner_return']:+.2f}% on ZERO TRADES "
+                  f"(capped stake bonus) ({o['reason']})")
+        elif len(ranking) > 2:
+            print(f"  {len(ranking)}-way ({o['reason']})")
+        else:
+            print(f"  WINNER {o['winner']} {o['winner_return']:+.2f}%  "
+                  f"beat {o['loser']} {o['loser_return']:+.2f}% ({o['reason']})")
+        if len(ranking) > 2:
+            for r in ranking:
+                tag = ("reinforces" if r["rank"] == 1 and not o.get("both_stopped_out")
+                      else "self-critiques")
+                print(f"  #{r['rank']} {r['name']:<8} {r['return_pct']:+.2f}%  "
+                      f"{tag}: {r['note']}")
+        else:
+            print(f"  {o['winner']} self-critiques: {o.get('winner_note', '')}"
+                  if o.get("both_stopped_out") else
+                  f"  {o['winner']} reinforces: {o.get('winner_note', '')}")
+            print(f"  {o['loser']} self-critiques: {o['mutation_note']}")
+        _print_reflection(o.get("reflection"))
     else:
         print(f"\n  Day {res['day']} of {res['of']} processed ({res['date']}).")
 
@@ -288,8 +310,9 @@ def _print_reflection(ref):
     if not ref:
         return
     verdict = "ADOPTED" if ref["accepted"] else "rejected"
-    print(f"  reflection → proposal to {ref['kind']} a guideline "
-          f"[{verdict}, {ref['agree']}/{ref['total']} agreed]")
+    practice = ref.get("practice", "good").upper()
+    print(f"  reflection → proposal to {ref['kind']} a {practice} PRACTICE "
+          f"guideline [{verdict}, {ref['agree']}/{ref['total']} agreed]")
     print(f"             \"{ref['text']}\"")
 
 

@@ -31,7 +31,11 @@ def active_guidelines(conn) -> list[dict]:
 
 
 def active_texts(conn) -> list[str]:
-    return [g["text"] for g in active_guidelines(conn)]
+    """Labeled so an agent can tell a DO from an AVOID at a glance — this is
+    the "leverage to check the guidelines" every decide() call gets: the full
+    current list, right in its context, every single turn."""
+    return [f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}"
+            for g in active_guidelines(conn)]
 
 
 def current_lineages(conn) -> list[dict]:
@@ -40,6 +44,33 @@ def current_lineages(conn) -> list[dict]:
            FROM lineages l JOIN agents a ON a.id = l.current_agent_id
            ORDER BY l.id"""
     ).fetchall()]
+
+
+def _recent_experience(conn, per_lineage: int) -> list[dict]:
+    """Both lineages' own self-reflection notes — what they actually SAID
+    they learned from their own trades (forward._reflect_winner/_loser),
+    newest generations first per lineage. This is the "agents communicate
+    about their own experience" raw material the reflection pass now drafts
+    guidelines from, instead of only inferring a pattern from trade-count/
+    drawdown numbers."""
+    rows = conn.execute(
+        """SELECT l.name AS lineage, a.generation,
+                  json_extract(a.strategy_config, '$.notes') AS notes,
+                  a.mutation_note
+           FROM agents a JOIN lineages l ON l.id = a.lineage_id
+           ORDER BY l.id, a.generation DESC"""
+    ).fetchall()
+    by_lineage: dict[str, list[dict]] = {}
+    for r in rows:
+        note = r["notes"] or r["mutation_note"]
+        if not note:
+            continue
+        by_lineage.setdefault(r["lineage"], [])
+        if len(by_lineage[r["lineage"]]) < per_lineage:
+            by_lineage[r["lineage"]].append(
+                {"generation": r["generation"], "note": note})
+    return [{"lineage": name, "notes": notes}
+            for name, notes in by_lineage.items() if notes]
 
 
 def _recent_stats(conn, limit: int) -> list[dict]:
@@ -70,10 +101,19 @@ def draft_proposal(conn, config: ArenaConfig, use_llm: bool = False) -> dict | N
                  "guideline_id": int|None, "evidence": str}
     """
     if use_llm:
+        # Primary path: ground the proposal in what both agents actually said
+        # about their own trades, not just win/loss statistics.
+        experience = _recent_experience(conn, config.reflection_interval)
+        got = _llm_draft_from_experience(experience, active_texts(conn))
+        if got is not None:
+            return got
         got = _llm_draft(conn, config)
         if got is not None:
             return got  # includes explicit None only via fallback below
 
+    # Offline/no-pattern-yet fallback: the older stats heuristic (winners'
+    # trade-count/drawdown vs losers'). Always tags practice="good" — both
+    # detectable patterns here describe something worth DOING, not avoiding.
     sample = _recent_stats(conn, config.reflection_interval * 2)
     if len(sample) < config.reflection_min_sample:
         return None
@@ -86,14 +126,14 @@ def draft_proposal(conn, config: ArenaConfig, use_llm: bool = False) -> dict | N
 
     # ADD if a pattern holds and isn't already codified.
     if fewer >= frac and "fewer_trades" not in active:
-        return {"kind": "add", "tag": "fewer_trades",
+        return {"kind": "add", "practice": "good", "tag": "fewer_trades",
                 "text": f"Prefer fewer, higher-conviction trades — winners "
                         f"out-traded by fewer fills in {fewer*100:.0f}% of the "
                         f"last {n} rounds.",
                 "guideline_id": None,
                 "evidence": f"fewer-trade winners {fewer*100:.0f}% of {n} rounds"}
     if lower_dd >= frac and "low_drawdown" not in active:
-        return {"kind": "add", "tag": "low_drawdown",
+        return {"kind": "add", "practice": "good", "tag": "low_drawdown",
                 "text": f"Control drawdown tightly — winners held a smaller max "
                         f"drawdown in {lower_dd*100:.0f}% of the last {n} rounds.",
                 "guideline_id": None,
@@ -102,15 +142,29 @@ def draft_proposal(conn, config: ArenaConfig, use_llm: bool = False) -> dict | N
     # REMOVE if a codified pattern has clearly stopped holding.
     if "fewer_trades" in active and fewer < (1 - frac):
         gid, text = active["fewer_trades"]
-        return {"kind": "remove", "tag": "fewer_trades", "text": text,
+        return {"kind": "remove", "practice": "good", "tag": "fewer_trades", "text": text,
                 "guideline_id": gid,
                 "evidence": f"fewer-trade winners only {fewer*100:.0f}% lately"}
     if "low_drawdown" in active and lower_dd < (1 - frac):
         gid, text = active["low_drawdown"]
-        return {"kind": "remove", "tag": "low_drawdown", "text": text,
+        return {"kind": "remove", "practice": "good", "tag": "low_drawdown", "text": text,
                 "guideline_id": gid,
                 "evidence": f"lower-drawdown winners only {lower_dd*100:.0f}% lately"}
     return None
+
+
+def _llm_draft_from_experience(experience: list[dict], active: list[str]) -> dict | None:
+    try:
+        from .llm import groq_available, llm_draft_guideline_from_experience
+        if not groq_available() or not experience:
+            return None
+        got = llm_draft_guideline_from_experience(experience, active)
+        if got is None or got.get("kind") not in ("add", "remove"):
+            return None
+        got.setdefault("tag", got.get("kind", "") + "_" + str(hash(got.get("text", "")))[:6])
+        return got
+    except Exception:
+        return None
 
 
 _TAG_KEYWORDS = {"fewer_trades": "fewer", "low_drawdown": "drawdown"}
@@ -177,10 +231,10 @@ def open_and_resolve(conn, config: ArenaConfig, source_round_id: int | None,
 
     cur = conn.execute(
         """INSERT INTO guideline_proposals
-           (kind, guideline_id, proposed_text, source_round_id, created_at)
-           VALUES (?,?,?,?,?)""",
-        (proposal["kind"], proposal.get("guideline_id"), proposal["text"],
-         source_round_id, _now()),
+           (kind, practice, guideline_id, proposed_text, source_round_id, created_at)
+           VALUES (?,?,?,?,?,?)""",
+        (proposal["kind"], proposal.get("practice", "good"),
+         proposal.get("guideline_id"), proposal["text"], source_round_id, _now()),
     )
     proposal_id = cur.lastrowid
     conn.commit()
@@ -207,6 +261,7 @@ def open_and_resolve(conn, config: ArenaConfig, source_round_id: int | None,
     return {
         "proposal_id": proposal_id,
         "kind": proposal["kind"],
+        "practice": proposal.get("practice", "good"),
         "text": proposal["text"],
         "evidence": proposal.get("evidence", ""),
         "agree": agree,
@@ -221,9 +276,9 @@ def _apply(conn, proposal: dict) -> None:
             "SELECT COALESCE(MAX(version),0)+1 v FROM guidelines"
         ).fetchone()["v"]
         conn.execute(
-            "INSERT INTO guidelines (text, status, version, created_at) "
-            "VALUES (?, 'active', ?, ?)",
-            (proposal["text"], version, _now()),
+            "INSERT INTO guidelines (text, practice, status, version, created_at) "
+            "VALUES (?, ?, 'active', ?, ?)",
+            (proposal["text"], proposal.get("practice", "good"), version, _now()),
         )
     else:  # remove
         conn.execute(

@@ -63,7 +63,18 @@ def _openrouter_post(model: str, messages: list, temperature: float,
                  "Content-Type": "application/json",
                  "X-Title": "PIT Arena"})
     with urllib.request.urlopen(req, timeout=90) as r:
-        return json.loads(r.read().decode())["choices"][0]["message"]["content"]
+        data = json.loads(r.read().decode())
+    if "error" in data:
+        # OpenRouter sometimes returns HTTP 200 with an error PAYLOAD instead
+        # of an HTTP error status (e.g. "Upstream error from Nvidia: Service
+        # temporarily overloaded") — indexing straight into ["choices"] here
+        # used to surface as a bare, unrecognizable KeyError that _is_retryable
+        # couldn't pattern-match on. Surface the real message so retry/backoff
+        # (and the Groq fallback on the last attempt) actually kicks in.
+        err = data["error"]
+        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        raise RuntimeError(f"OpenRouter error: {msg}")
+    return data["choices"][0]["message"]["content"]
 
 
 def _openrouter_chat(model: str, messages: list, temperature: float,
@@ -248,14 +259,71 @@ def llm_draft_guideline(sample: list[dict], active: list[str]) -> dict | None:
         return None
 
 
+def llm_draft_guideline_from_experience(experience: list[dict],
+                                        active: list[str]) -> dict | None:
+    """The primary way guidelines now form: grounded in what both agents
+    actually SAID about their own trades (self-reflection notes from every
+    generation, both lineages), not just win/loss statistics. Simulates the
+    pool "discussing" recent experience and agreeing on a lesson — one call
+    plays neutral summarizer across both lineages' notes at once, since
+    voting (a separate, later step) is where each lineage's own agreement or
+    resistance actually gets decided.
+
+    Returns {"kind": "add"|"remove", "practice": "good"|"bad", "text": "...",
+    "tag": "...", "evidence": "..."} or None if nothing recurs yet."""
+    if not groq_available() or not experience:
+        return None
+    try:
+        prompt = {
+            "both_lineages_recent_self_reflection": experience,
+            "already_active_guidelines": active,
+            "instruction": (
+                "Two trading agents have been reflecting on their OWN trades "
+                "after every round. Read both lineages' notes above. If — and "
+                "only if — the SAME lesson shows up independently across "
+                "multiple generations or both lineages (not a one-off from a "
+                "single note), propose ONE new shared guideline: either a GOOD "
+                "practice worth both agents following, or a BAD practice both "
+                "should avoid. If an existing guideline no longer matches recent "
+                "experience, propose removing it instead. Return JSON "
+                "{\"kind\":\"add\"|\"remove\",\"practice\":\"good\"|\"bad\","
+                "\"text\":\"...\",\"tag\":\"short_snake_case\",\"evidence\":\"...\"} "
+                "or {\"kind\":\"none\"} if nothing recurs yet."
+            ),
+        }
+        resp = _client().chat.completions.create(
+            model=DEFAULT_MODEL,
+            messages=[
+                {"role": "system",
+                 "content": "You summarize what a pool of trading agents has "
+                            "collectively learned from their own experience. "
+                            "JSON only."},
+                {"role": "user", "content": json.dumps(prompt)},
+            ],
+            temperature=0.4,
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(resp.choices[0].message.content)
+        if data.get("kind") not in ("add", "remove") or not data.get("text"):
+            return None
+        data.setdefault("guideline_id", None)
+        data.setdefault("evidence", "llm-identified pattern across agent notes")
+        data["practice"] = data.get("practice") if data.get("practice") in ("good", "bad") else "good"
+        return data
+    except Exception:
+        return None
+
+
 def llm_vote_guideline(strategy_cfg: dict, proposal: dict) -> tuple[str, str]:
     """One lineage's agent votes on a proposal. Fallback handled by caller."""
     prompt = {
         "your_strategy": strategy_cfg,
         "proposal_kind": proposal["kind"],
+        "practice_type": proposal.get("practice", "good"),
         "proposed_guideline": proposal["text"],
         "instruction": ("Vote whether this shared guideline should apply to the "
-                        "whole pool (including you). Return JSON "
+                        "whole pool (including you), based on whether it matches "
+                        "your own trading experience. Return JSON "
                         "{\"vote\":\"agree\"|\"disagree\",\"reasoning\":\"...\"}."),
     }
     resp = _client().chat.completions.create(

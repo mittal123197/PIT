@@ -18,6 +18,8 @@ fresh from Yahoo, never from this mirror (its snapshot recency is unverified).
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import random
 import time
@@ -28,6 +30,14 @@ _EXCHANGES = ["nasdaq", "nyse", "amex"]
 
 _UNIVERSE_CACHE: dict = {"tickers": None, "loaded_at": 0.0}
 _CACHE_TTL_SECONDS = 24 * 3600  # the listing itself barely changes day to day
+
+# A real, published index (not hand-picked by us) — used as an optional
+# QUALITY filter on top of the full universe: cuts illiquid/delisted penny
+# names while keeping genuine sector diversity across ~500 companies, not
+# just the 10 most-famous mega-caps. See config.trade_universe_mode.
+_SP500_URL = ("https://raw.githubusercontent.com/datasets/"
+             "s-and-p-500-companies/main/data/constituents.csv")
+_SP500_CACHE: dict = {"tickers": None, "loaded_at": 0.0}
 
 # Symbols that are technically "listed" but aren't ordinary common stock —
 # warrants, rights, units, preferred shares, test issues. Filtered by name
@@ -77,10 +87,50 @@ def full_universe(force_refresh: bool = False) -> list[dict]:
     return tickers or (_UNIVERSE_CACHE["tickers"] or [])
 
 
-def random_sample(n: int = 150, seed: int | None = None) -> list[str]:
-    """N random real ticker symbols from the full universe. A different sample
-    each call (unless seeded) so discovery isn't stuck on the same subset."""
-    universe = full_universe()
+def sp500_universe(force_refresh: bool = False) -> list[dict]:
+    """The S&P 500 constituent list: [{"symbol", "name", "sector"}, ...].
+    A real, publicly-maintained index — not us curating a shortlist — so it
+    stays a genuine ~500-company discovery pool, just a quality-filtered one."""
+    now = time.time()
+    if (not force_refresh and _SP500_CACHE["tickers"] is not None
+            and now - _SP500_CACHE["loaded_at"] < _CACHE_TTL_SECONDS):
+        return _SP500_CACHE["tickers"]
+    try:
+        req = urllib.request.Request(_SP500_URL, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            text = r.read().decode()
+    except Exception:
+        return _SP500_CACHE["tickers"] or []
+
+    rows = []
+    for row in csv.DictReader(io.StringIO(text)):
+        sym = (row.get("Symbol") or "").strip().upper().replace(".", "-")
+        if not sym:
+            continue
+        rows.append({"symbol": sym, "name": row.get("Security") or "",
+                     "sector": row.get("GICS Sector") or ""})
+    if rows:
+        _SP500_CACHE["tickers"] = rows
+        _SP500_CACHE["loaded_at"] = now
+    return rows or (_SP500_CACHE["tickers"] or [])
+
+
+def universe_for(mode: str) -> list[dict]:
+    """mode: 'full' (every NASDAQ/NYSE/AMEX common stock, thousands of
+    tickers, includes illiquid/delisted noise) or 'top500' (S&P 500
+    constituents only — real and published, quality-filtered but still
+    genuinely diverse). Falls back to 'full' if the S&P mirror is down."""
+    if mode == "top500":
+        pool = sp500_universe()
+        return pool or full_universe()
+    return full_universe()
+
+
+def random_sample(n: int = 150, seed: int | None = None,
+                  mode: str = "full") -> list[str]:
+    """N random real ticker symbols from the chosen universe. A different
+    sample each call (unless seeded) so discovery isn't stuck on one subset."""
+    universe = universe_for(mode)
     if not universe:
         return []
     rng = random.Random(seed)
@@ -88,5 +138,5 @@ def random_sample(n: int = 150, seed: int | None = None) -> list[str]:
     return [row["symbol"] for row in rng.sample(universe, n)]
 
 
-def universe_size() -> int:
-    return len(full_universe())
+def universe_size(mode: str = "full") -> int:
+    return len(universe_for(mode))

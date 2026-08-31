@@ -173,7 +173,8 @@ class Engine:
         active = gmod.active_texts(self.conn)
 
         self._simulate(feed, runs, goal_pct, round_id=round_id, persist=True,
-                       guidelines=active)
+                       guidelines=active,
+                       stop_loss_pct=self.config.stop_loss_pct_for(length_days))
         final_prices = feed.prices()
         self._persist_final_states(round_id, runs, final_prices)
 
@@ -203,9 +204,11 @@ class Engine:
 
     def _simulate(self, feed: PriceFeed, runs: dict[int, _AgentRun],
                   goal_pct: float, round_id: int | None, persist: bool,
-                  guidelines: list[str] | None = None) -> None:
+                  guidelines: list[str] | None = None,
+                  stop_loss_pct: float | None = None) -> None:
         """Step the feed bar-by-bar, waking + executing agents. The core loop."""
         guidelines = guidelines or []
+        stop = stop_loss_pct if stop_loss_pct is not None else self.config.stop_loss_pct_for(0)
         history: dict[str, list[float]] = {s: [] for s in feed.symbols}
         total_bars = len(feed)
         bar_index = 0
@@ -228,8 +231,12 @@ class Engine:
                     continue
                 run.portfolio.mark(prices)
 
-                # 1. hard constraint: stop-loss
-                if run.portfolio.return_pct(prices) <= -self.config.stop_loss_pct:
+                # 1. hard constraints: stop-loss / take-profit
+                ret = run.portfolio.return_pct(prices)
+                if ret <= -stop:
+                    self._liquidate(run, prices, now, round_id, persist)
+                    continue
+                if ret >= goal_pct:
                     self._liquidate(run, prices, now, round_id, persist)
                     continue
 

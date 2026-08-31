@@ -20,6 +20,11 @@ import urllib.request
 from .config import _BUILTIN_UNIVERSE  # reference for the yfinance movers feed
 
 DATA_SOURCE = os.getenv("PIT_DATA_SOURCE", "yfinance").lower()
+# 'top500' (default) restricts full-market scans to S&P 500 constituents — a
+# real published index, quality-filtered but still ~500 genuinely diverse
+# companies, not the same handful of mega-caps. 'full' restores the
+# unrestricted ~5,400-ticker universe. See full_market.py / config.py.
+TRADE_UNIVERSE_MODE = os.getenv("PIT_TRADE_UNIVERSE", "top500").lower()
 _ALPACA_DATA = "https://data.alpaca.markets"
 
 
@@ -138,13 +143,14 @@ def scan_full_market(n: int = 12, sample_size: int = 150,
     shortlist. This is what makes an agent's first move data-driven instead of
     "recall a famous name from training data" — see full_market.py."""
     from . import full_market
-    sample = full_market.random_sample(sample_size, seed=seed)
+    sample = full_market.random_sample(sample_size, seed=seed,
+                                       mode=TRADE_UNIVERSE_MODE)
     if not sample:
         return {"gainers": [], "losers": [],
                 "note": "full-market universe unreachable; ticker discovery "
                         "unavailable this call"}
     result = _yf_movers(n, reference=sample)
-    result["universe_size"] = full_market.universe_size()
+    result["universe_size"] = full_market.universe_size(TRADE_UNIVERSE_MODE)
     result["sampled"] = len(sample)
     return result
 

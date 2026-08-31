@@ -42,7 +42,33 @@ def connect(db_path: str | None = None) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     """Create all tables if they don't exist (idempotent)."""
     conn.executescript(SCHEMA_PATH.read_text())
+    _migrate_columns(conn)
     conn.commit()
+
+
+# No formal migration framework — this project is early enough that most
+# schema changes have just meant starting a fresh data/*.db. `CREATE TABLE IF
+# NOT EXISTS` alone doesn't add a column to an EXISTING table, so a new column
+# on a table that already existed needs one of these, best-effort (ignored if
+# the column is already there or the table doesn't exist yet).
+_COLUMN_ADDITIONS = [
+    ("guidelines", "practice", "TEXT NOT NULL DEFAULT 'good'"),
+    ("guideline_proposals", "practice", "TEXT NOT NULL DEFAULT 'good'"),
+    ("agent_messages", "kind", "TEXT NOT NULL DEFAULT 'banter'"),
+    ("round_results", "winner_note", "TEXT"),
+    ("round_results", "loser_note", "TEXT"),
+    ("round_results", "both_stopped_out", "INTEGER NOT NULL DEFAULT 0"),
+    ("round_results", "passive_win", "INTEGER NOT NULL DEFAULT 0"),
+    ("round_states", "cost_basis", "TEXT NOT NULL DEFAULT '{}'"),
+]
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    for table, column, decl in _COLUMN_ADDITIONS:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        except sqlite3.OperationalError:
+            pass  # column already exists (or table doesn't exist yet)
 
 
 def reset_db(db_path: str | None = None) -> None:

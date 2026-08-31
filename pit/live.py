@@ -20,8 +20,13 @@ from .config import CURRENCY, DEFAULT, MARKET, ArenaConfig
 
 def _persist_audit(conn, round_id, agent_id, trace: list[dict]) -> None:
     """Write every turn of a decision (thoughts, tools used, results, final
-    action) to `agent_audit`, for the debug-mode audit log on /live."""
-    ts = forward._now()
+    action) to `agent_audit`, for the debug-mode audit log on /live.
+
+    Uses local wall-clock time (matching trades/fills, which use
+    datetime.now() via _tick's `ts`) — not forward._now()'s UTC ISO. Mixing
+    the two used to show audit/message timestamps hours off from the fills
+    they belonged to (a full UTC-offset gap, e.g. IST is +5:30)."""
+    ts = datetime.now().strftime("%H:%M:%S")
     for step in trace:
         conn.execute(
             """INSERT INTO agent_audit
@@ -93,10 +98,55 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
             break
         time.sleep(min(refresh, remaining))
 
-    conn.execute("UPDATE rounds SET status='ended', deadline=? WHERE id=?",
-                 (forward._now(), rnd["id"]))
-    conn.commit()
-    return _standings(conn, rnd, verbose)
+    # Resolve for real: winner/loser cascade, ELO, stake, and — the whole
+    # point of the arena — mutate the loser into its next generation from the
+    # winner's trade log. Without this, a live session just stopped ('ended')
+    # and never touched `lineages`/`round_results`, so wins/losses/generation
+    # on the leaderboard never moved and no recreation ever happened.
+    rnd_fresh = dict(conn.execute("SELECT * FROM rounds WHERE id=?",
+                                  (rnd["id"],)).fetchone())
+    if rnd_fresh["status"] == "live":
+        price = _price_fn()
+        outcome = forward._resolve(conn, rnd_fresh, config, price)
+        if verbose:
+            ranking = outcome.get("ranking") or []
+            if outcome.get("both_stopped_out"):
+                print(f"\n● DOUBLE STOP-OUT — everyone got liquidated. "
+                      f"{outcome['winner']} {outcome['winner_return']:+.2f}% was "
+                      f"merely less bad than the rest ({outcome['reason']})")
+            elif outcome.get("passive_win"):
+                print(f"\n● ROUND RESOLVED — {outcome['winner']} wins {outcome['winner_return']:+.2f}% "
+                      f"on ZERO TRADES (capped stake bonus) ({outcome['reason']})")
+            elif len(ranking) > 2:
+                print(f"\n● ROUND RESOLVED — {len(ranking)}-way ({outcome['reason']})")
+            else:
+                print(f"\n● ROUND RESOLVED — WINNER {outcome['winner']} "
+                      f"{outcome['winner_return']:+.2f}% beat {outcome['loser']} "
+                      f"{outcome['loser_return']:+.2f}% ({outcome['reason']})")
+            if len(ranking) > 2:
+                # full N-way placement — the 2-line winner/loser summary above
+                # would silently drop every middle finisher
+                for r in ranking:
+                    tag = ("reinforces" if r["rank"] == 1 and not outcome.get("both_stopped_out")
+                          else "self-critiques")
+                    print(f"  #{r['rank']} {r['name']:<8} {r['return_pct']:+.2f}%  "
+                          f"{tag}: {r['note']}")
+            else:
+                verb = "self-critiques" if outcome.get("both_stopped_out") else "reinforces"
+                print(f"  {outcome['winner']} {verb}: {outcome.get('winner_note', '')}")
+                print(f"  {outcome['loser']} self-critiques: {outcome['mutation_note']}")
+            if outcome.get("reflection"):
+                r = outcome["reflection"]
+                verdict = "ADOPTED" if r["accepted"] else "rejected"
+                practice = r.get("practice", "good").upper()
+                print(f"  reflection → proposal to {r['kind']} a {practice} PRACTICE "
+                      f"guideline [{verdict}, {r['agree']}/{r['total']} agreed]: "
+                      f"\"{r['text']}\"", flush=True)
+    else:
+        outcome = None
+    standings = _standings(conn, rnd, verbose)
+    standings["outcome"] = outcome
+    return standings
 
 
 def _refresh_marks(conn, config, rnd, verbose):
@@ -107,14 +157,22 @@ def _refresh_marks(conn, config, rnd, verbose):
     for r in conn.execute("SELECT * FROM round_states WHERE round_id=?",
                           (rnd["id"],)).fetchall():
         st = dict(r)
+        if st["status"] == "active":
+            forward.check_position_stops(conn, rnd["id"], st["agent_id"], st,
+                                         price, datetime.now().strftime("%H:%M:%S"),
+                                         config)
         h = json.loads(st["holdings"])
         total = st["current_capital"] + sum(q * (price(t) or 0) for t, q in h.items())
         ret = (total / st["starting_capital"] - 1) * 100
-        if st["status"] == "active" and ret <= -config.stop_loss_pct:
-            forward._liquidate(conn, rnd["id"], st["agent_id"], st, price,
-                               datetime.now().strftime("%H:%M:%S"))
-            total = st["current_capital"]
-            ret = (total / st["starting_capital"] - 1) * 100
+        if st["status"] == "active":
+            stop = config.stop_loss_pct_for(rnd["length_days"])
+            goal = rnd["goal_pct"]
+            hit_reason = "stop-loss" if ret <= -stop else "goal-hit" if ret >= goal else None
+            if hit_reason:
+                forward._liquidate(conn, rnd["id"], st["agent_id"], st, price,
+                                   datetime.now().strftime("%H:%M:%S"), reason=hit_reason)
+                total = st["current_capital"]
+                ret = (total / st["starting_capital"] - 1) * 100
         conn.execute("UPDATE round_states SET final_return_pct=? "
                      "WHERE round_id=? AND agent_id=?",
                      (round(ret, 3), rnd["id"], st["agent_id"]))
@@ -145,11 +203,25 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
         if st["status"] != "active":
             continue
         name = forward._name(conn, aid)
-        if returns[aid] <= -config.stop_loss_pct:
-            forward._liquidate(conn, rnd["id"], aid, st, price, ts)
+        n_stopped = forward.check_position_stops(conn, rnd["id"], aid, st, price, ts, config)
+        if n_stopped:
+            returns[aid] = (value(st) / st["starting_capital"] - 1) * 100
+            if verbose:
+                print(f"  {name}: {n_stopped} position(s) hit their per-position "
+                      f"stop-loss", flush=True)
+        stop = config.stop_loss_pct_for(rnd["length_days"])
+        goal = rnd["goal_pct"]
+        if returns[aid] <= -stop:
+            forward._liquidate(conn, rnd["id"], aid, st, price, ts, reason="stop-loss")
             conn.commit()
             if verbose:
                 print(f"  {name} STOPPED OUT at {returns[aid]:.1f}%", flush=True)
+            continue
+        if returns[aid] >= goal:
+            forward._liquidate(conn, rnd["id"], aid, st, price, ts, reason="goal-hit")
+            conn.commit()
+            if verbose:
+                print(f"  {name} BOOKED PROFIT at {returns[aid]:.1f}% (goal {goal:.1f}%)", flush=True)
             continue
 
         agent = conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone()
@@ -180,9 +252,11 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
                      (st["current_capital"], st["holdings"], round(returns[aid], 3),
                       rnd["id"], aid))
         if message:
+            # local wall-clock ts (matches trades/fills), not forward._now()'s
+            # UTC ISO — see _persist_audit for why mixing the two is a bug.
             conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "
                          "message) VALUES (?,?,?,?)",
-                         (rnd["id"], aid, forward._now(), message))
+                         (rnd["id"], aid, ts, message))
         conn.commit()
         if verbose:
             arrow = "▲" if returns[aid] >= 0 else "▼"

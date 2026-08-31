@@ -15,7 +15,7 @@ import os
 import time
 
 from . import market
-from .config import MARKET
+from .config import DEFAULT, MARKET
 from .llm import (AGENT_AWARE, DEFAULT_MODEL, _is_retryable, groq_available,
                   llm_chat)
 
@@ -57,16 +57,31 @@ cut losers, and rotate into better setups; selling to lock in a gain or stop a \
 loss is part of winning. Review your open positions every turn and sell the ones \
 that have run or stalled.
 
-Hard rule: a stop-loss will liquidate you if your book falls too far — manage \
-risk. Goal: maximise return, avoid losses.
+Hard rules, both enforced automatically (you don't have to act on them, but \
+you can't stop them): (1) a PORTFOLIO stop-loss liquidates your entire book if \
+its aggregate return falls too far. (2) a PER-POSITION stop-loss force-sells \
+ANY single holding on its own the moment IT ALONE falls """ + \
+f"{DEFAULT.position_stop_loss_pct:.0f}%" + """ below what you paid for it — \
+independent of how the rest of your book is doing. Manage risk accordingly: \
+don't count on averaging down a loser before it hits its own stop.
+Goal: maximise return, avoid losses.
 """ + ("""
-Stakes: if you LOSE this round you are retired and replaced by a version rebuilt \
-from the WINNER's trades. You can see your rival's live return but not their \
-trades. Play to win.
+Stakes: if you LOSE this round your stake shrinks and you carry forward into a \
+new attempt built from YOUR OWN self-critique — study your own mistakes, don't \
+just retire quietly. If you WIN your stake grows and you reinforce whatever \
+worked. You can see your rival's live return but not their trades. Play to win.
 """ if AGENT_AWARE else "") + """
-You can see your rival's recent messages. This is a rivalry — talk trash, \
-defend your calls, mock their picks, get in their head. Keep it playful but \
-competitive.
+You can see your rival's recent messages — some are trash talk, some (marked \
+\U0001f4dd) are the rival sharing a genuine lesson it drew from its own last \
+round. This is a rivalry — talk trash, defend your calls, mock their picks, \
+get in their head. Keep it playful but competitive.
+
+`shared_guidelines` in your context is the pool's constitution — rules both \
+you and your rival voted on, drawn from real self-reflection after past \
+rounds, not from us. Each is labeled "DO: ..." (a good practice worth \
+following) or "AVOID: ..." (a bad practice both of you agreed to stop). \
+Check it before you commit — you have full access to it every single \
+decision, it costs nothing to consult.
 
 Respond ONLY with JSON of this shape:
 {

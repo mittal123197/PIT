@@ -187,10 +187,12 @@ def _replay_scan(n: int = 12, sample_size: int = 150,
     agent's discovery stays inside the timeline it's actually trading in.
     A random sample each call, same as the live version."""
     from . import full_market
+    from .market import TRADE_UNIVERSE_MODE
     day = _STATE.get("day")
     if not day:
         return {"gainers": [], "losers": [], "note": "replay not active"}
-    sample = full_market.random_sample(sample_size, seed=seed)
+    sample = full_market.random_sample(sample_size, seed=seed,
+                                       mode=TRADE_UNIVERSE_MODE)
     if not sample:
         return {"gainers": [], "losers": [],
                 "note": "full-market universe unreachable this call"}
@@ -213,4 +215,5 @@ def _replay_scan(n: int = 12, sample_size: int = 150,
                         "change_pct": round((price / first_price - 1) * 100, 2)})
     rows.sort(key=lambda r: r["change_pct"], reverse=True)
     return {"gainers": rows[:n], "losers": list(reversed(rows[-n:])),
-            "universe_size": full_market.universe_size(), "sampled": len(sample)}
+            "universe_size": full_market.universe_size(TRADE_UNIVERSE_MODE),
+            "sampled": len(sample)}

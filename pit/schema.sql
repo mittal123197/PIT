@@ -61,7 +61,10 @@ CREATE TABLE IF NOT EXISTS round_states (
     starting_capital   REAL NOT NULL,
     current_capital    REAL NOT NULL,     -- cash only; total value = cash + holdings
     holdings           TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: qty}
-    status             TEXT NOT NULL DEFAULT 'active',  -- active | liquidated
+    cost_basis         TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: avg_buy_price},
+                                              -- weighted average; drives the
+                                              -- per-position hard stop-loss
+    status             TEXT NOT NULL DEFAULT 'active',  -- active | liquidated | goal_hit
     liquidated_at      TEXT,
     max_drawdown_pct   REAL NOT NULL DEFAULT 0.0,
     trade_count        INTEGER NOT NULL DEFAULT 0,
@@ -100,6 +103,10 @@ CREATE TABLE IF NOT EXISTS price_watches (
     created_at    TEXT NOT NULL
 );
 
+-- winner_note/loser_note duplicate what's derivable from `agents` (the
+-- winner's notes get overwritten in place each win, so without a copy here a
+-- past round's page can't show what the winner said AT THE TIME) — cheap
+-- redundancy that makes every past round's "what was learned" self-contained.
 CREATE TABLE IF NOT EXISTS round_results (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     round_id          INTEGER NOT NULL UNIQUE REFERENCES rounds(id),
@@ -109,14 +116,40 @@ CREATE TABLE IF NOT EXISTS round_results (
     winner_return_pct REAL,
     loser_return_pct  REAL,
     rating_delta      REAL,
+    winner_note       TEXT,                 -- winner's self-reflection, AS OF this round
+    loser_note        TEXT,                 -- loser's self-critique that seeded its next gen
+    both_stopped_out  INTEGER NOT NULL DEFAULT 0,  -- both hit the hard stop-loss;
+                                             -- the "winner" was only less bad, not good
+    passive_win       INTEGER NOT NULL DEFAULT 0,  -- winner made ZERO trades;
+                                             -- stake bonus was capped, see config
     created_at        TEXT NOT NULL
 );
+
+-- Full N-way outcome, one row per participant per round — round_results
+-- above only captures a single winner/loser pair (a 2-agent-era design) and
+-- can't represent a 3rd (or Nth) place finisher's own return/note/stake
+-- change. This table is the complete record; round_results is kept only for
+-- backward-compat display (winner = rank 1, loser = the LAST rank).
+CREATE TABLE IF NOT EXISTS round_rankings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id      INTEGER NOT NULL REFERENCES rounds(id),
+    agent_id      INTEGER NOT NULL REFERENCES agents(id),
+    rank          INTEGER NOT NULL,   -- 1 = best, no ties
+    return_pct    REAL NOT NULL,
+    note          TEXT,               -- reinforcement (rank 1) or self-critique (else)
+    stake_mult    REAL NOT NULL,      -- e.g. 1.25 (win), 0.92 (middle), 0.80 (last)
+    rating_delta  REAL NOT NULL,      -- net ELO change this round (can be negative)
+    created_at    TEXT NOT NULL,
+    UNIQUE (round_id, agent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rankings_round ON round_rankings(round_id, rank);
 
 -- ---- Pool-level "constitution" (schema now, vote mechanism in Phase 2) ----
 
 CREATE TABLE IF NOT EXISTS guidelines (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     text        TEXT NOT NULL,
+    practice    TEXT NOT NULL DEFAULT 'good',  -- good (do this) | bad (avoid this)
     status      TEXT NOT NULL DEFAULT 'active',  -- active | retired
     version     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
@@ -126,6 +159,7 @@ CREATE TABLE IF NOT EXISTS guidelines (
 CREATE TABLE IF NOT EXISTS guideline_proposals (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     kind           TEXT NOT NULL,         -- add | remove
+    practice       TEXT NOT NULL DEFAULT 'good',  -- good | bad
     guideline_id   INTEGER REFERENCES guidelines(id),  -- NULL for a brand-new 'add'
     proposed_text  TEXT,
     source_round_id INTEGER REFERENCES rounds(id),
@@ -165,13 +199,16 @@ CREATE TABLE IF NOT EXISTS agent_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_round ON agent_audit(round_id, id);
 
--- Agent-to-agent messages (banter / mocking) during a live session. Each agent
--- sees the rival's recent messages in its next decision, so a rivalry develops.
+-- Agent-to-agent messages during a live session — banter (trash talk) AND
+-- lessons (a self-reflection note shared with the rival after a round, the
+-- raw material both lineages' guideline votes eventually draw on). Each
+-- agent sees the rival's recent messages of both kinds in its next decision.
 CREATE TABLE IF NOT EXISTS agent_messages (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     round_id   INTEGER NOT NULL REFERENCES rounds(id),
     agent_id   INTEGER NOT NULL REFERENCES agents(id),
     ts         TEXT NOT NULL,
+    kind       TEXT NOT NULL DEFAULT 'banter',  -- banter | lesson
     message    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_round ON agent_messages(round_id, id);
