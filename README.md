@@ -11,9 +11,15 @@ below) and trades real, live (or historical-replay) prices. Every agent in
 the pool trades the same round, at the same time.
 
 - **Scoreboard visible, playbook hidden** — each agent sees every rival's live
-  return % every decision, but never their trades or holdings. Communication
-  happens only through explicit trash talk and self-reflection "lessons" they
-  choose to share.
+  return % every decision, but never their trade rationale, size, or entry
+  price. Communication happens only through explicit trash talk and
+  self-reflection "lessons" they choose to share.
+- **No duplicate holdings.** Each agent can see which tickers any rival
+  currently holds (symbols only, this round) and a BUY on one of those is
+  rejected server-side, no exceptions — an idea has to be your own, not a
+  rival's already-open position. The check uses a snapshot from the start of
+  the decision cycle, so it can't create a same-tick race where whoever gets
+  processed first claims a stock first.
 - **Full-market discovery, not memory.** An LLM asked to "pick a stock" from
   its own training data reliably reaches for the same 10 famous names.
   `full_market.py` instead gives it a real ticker universe to scan — either

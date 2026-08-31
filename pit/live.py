@@ -187,6 +187,9 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
     price = _price_fn()
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
+    # snapshotted ONCE, before anyone this tick trades — see forward._held_by_rivals
+    holdings_snapshot = {aid: set(json.loads(st["holdings"]).keys())
+                        for aid, st in states.items()}
     guidelines = gmod.active_texts(conn)
     ts = datetime.now().strftime("%H:%M:%S")
 
@@ -236,10 +239,15 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
             "opponent_return_pct": round(
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
+            "rival_held_tickers": forward._held_by_rivals(holdings_snapshot, aid),
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid),
         }
         orders, notes, message, trace = autonomous.decide(
             view, tick, 0, rnd["goal_pct"], guidelines, model=cfg.get("model"))
+        orders, blocked = forward._drop_blocked_buys(orders, set(view["rival_held_tickers"]))
+        if blocked and verbose:
+            print(f"  {name}: blocked buy on {', '.join(blocked)} — "
+                  f"already held by a rival", flush=True)
         if debug:
             _persist_audit(conn, rnd["id"], aid, trace)
         n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts)

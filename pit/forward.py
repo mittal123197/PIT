@@ -143,6 +143,9 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
 
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
+    # snapshotted ONCE, before anyone this cycle trades — see _held_by_rivals
+    holdings_snapshot = {aid: set(json.loads(st["holdings"]).keys())
+                        for aid, st in states.items()}
     guidelines = gmod.active_texts(conn)
     quote_cache: dict[str, float | None] = {}
 
@@ -201,11 +204,16 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
             "opponent_return_pct": round(
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
+            "rival_held_tickers": _held_by_rivals(holdings_snapshot, aid),
         }
         view["rival_messages"] = _recent_messages(conn, rnd["id"], aid)
         orders, notes, message, trace = autonomous.decide(
             view, day_index, rnd["length_days"], rnd["goal_pct"], guidelines,
             model=cfg.get("model"))
+        orders, blocked = _drop_blocked_buys(orders, set(view["rival_held_tickers"]))
+        if blocked:
+            logs.append(f"{_name(conn, aid)}: blocked buy on "
+                        f"{', '.join(blocked)} — already held by a rival")
         if debug:
             from .live import _persist_audit
             _persist_audit(conn, rnd["id"], aid, trace)
@@ -655,6 +663,32 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool) -> str:
     syms = ", ".join(sorted({t["symbol"] for t in own_trades})[:6]) or "nothing"
     verb = "Worked" if won else "Rethink"
     return f"{verb}: traded {syms} at {return_pct:+.2f}%."
+
+
+def _held_by_rivals(holdings_snapshot: dict, self_aid: int) -> list[str]:
+    """Every ticker any OTHER participant held as of THIS tick's start — the
+    "no duplicate stock" hard rule. Snapshotted once per tick/day, before
+    anyone this cycle has traded — not updated as agents execute within the
+    same cycle, so processing order can't hand one agent a race-condition
+    advantage over the others (whoever a for-loop happens to reach first)."""
+    held = set()
+    for aid, tickers in holdings_snapshot.items():
+        if aid != self_aid:
+            held |= tickers
+    return sorted(held)
+
+
+def _drop_blocked_buys(orders: list[dict], blocked: set) -> tuple[list[dict], list[str]]:
+    """Strip any BUY for a ticker a rival already holds (see
+    _held_by_rivals) — sells are never blocked. Server-side enforcement,
+    independent of whether the agent's own reasoning respected the rule."""
+    clean, rejected = [], []
+    for o in orders:
+        if o.get("side") == "buy" and o.get("ticker") in blocked:
+            rejected.append(o["ticker"])
+            continue
+        clean.append(o)
+    return clean, rejected
 
 
 def _recent_messages(conn, round_id, agent_id, limit=4) -> list[str]:

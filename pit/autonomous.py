@@ -69,12 +69,19 @@ Goal: maximise return, avoid losses.
 Stakes: if you LOSE this round your stake shrinks and you carry forward into a \
 new attempt built from YOUR OWN self-critique — study your own mistakes, don't \
 just retire quietly. If you WIN your stake grows and you reinforce whatever \
-worked. You can see your rival's live return but not their trades. Play to win.
+worked. Play to win.
 """ if AGENT_AWARE else "") + """
 You can see your rival's recent messages — some are trash talk, some (marked \
 \U0001f4dd) are the rival sharing a genuine lesson it drew from its own last \
 round. This is a rivalry — talk trash, defend your calls, mock their picks, \
 get in their head. Keep it playful but competitive.
+
+`rival_held_tickers` in your context lists every ticker any rival currently \
+holds (symbols only — not their size, entry price, or reasoning). Hard rule: \
+a BUY on any of those tickers is rejected automatically, no exceptions — find \
+your own idea instead of following into a name someone else already holds. \
+Sells are never restricted. This list is a snapshot from the start of this \
+decision cycle, so it won't include a rival's trade from this same moment.
 
 `shared_guidelines` in your context is the pool's constitution — rules both \
 you and your rival voted on, drawn from real self-reflection after past \
@@ -135,6 +142,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "your_return_pct": view["return_pct"],
         "rival_return_pct": view.get("opponent_return_pct"),
         "rival_recent_messages": view.get("rival_messages", []),
+        "rival_held_tickers": view.get("rival_held_tickers", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
     }
