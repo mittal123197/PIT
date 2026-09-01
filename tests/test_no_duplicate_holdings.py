@@ -58,7 +58,10 @@ def test_tick_rejects_a_buy_on_a_ticker_a_rival_already_holds(monkeypatch):
     conn.commit()
 
     def fake_decide(view, tick, total_days, goal_pct, guidelines, model=None):
-        if model == forward._RONIN_MODEL:
+        # identify "not VIPER" by an empty book rather than by model string —
+        # RONIN and VIPER can share the same model (both default to the cheap
+        # DeepSeek tier), so model identity alone can't distinguish agents
+        if not view["positions"]:
             assert "AAA" in view["rival_held_tickers"]
             return ([{"ticker": "AAA", "side": "buy", "qty": 5, "reason": "t"}], "", "", [])
         return ([], "", "", [])

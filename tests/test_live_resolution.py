@@ -30,10 +30,16 @@ def _fresh_conn():
 
 
 def _wire_deterministic_winner(monkeypatch):
-    """RONIN buys AAA on its one decision turn; VIPER and LYNX always hold.
-    AAA's price rises every time it's quoted, so RONIN's mark-to-market
-    return climbs above the other two over the session — a clean,
-    deterministic winner with no network/LLM calls anywhere in the loop.
+    """The very FIRST decide() call ever (RONIN's, since agents are processed
+    in id order and RONIN is id 1) buys AAA; every other call — VIPER, LYNX,
+    and RONIN's own later turns — always holds. AAA's price rises every time
+    it's quoted, so RONIN's mark-to-market return climbs above the other two
+    over the session — a clean, deterministic winner with no network/LLM
+    calls anywhere in the loop.
+
+    Deliberately NOT keyed off `model`: RONIN and VIPER can share the same
+    default model (both currently default to the cheap DeepSeek tier), so
+    model identity alone can't distinguish which agent is deciding.
 
     VIPER and LYNX tie exactly (both zero trades, zero return) — the
     ranking's deterministic tiebreak (agent_id ascending) always puts VIPER
@@ -42,13 +48,15 @@ def _wire_deterministic_winner(monkeypatch):
     always battling together now (not a rotating 1v1), not an artifact of
     this test."""
     state = {"price": 100.0}
+    calls = {"n": 0}
 
     def fake_quote(ticker):
         state["price"] += 0.5
         return {"price": state["price"]}
 
     def fake_decide(view, tick, total_days, goal_pct, guidelines, model=None):
-        if model == forward._RONIN_MODEL and not view["positions"]:
+        calls["n"] += 1
+        if calls["n"] == 1:
             return ([{"ticker": "AAA", "side": "buy", "qty": 500,
                       "reason": "test buy"}], "", "", [])
         return ([], "", "", [])

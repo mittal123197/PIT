@@ -109,8 +109,8 @@ deliberately different brain, split across two real providers:
 
 | Lineage | Model | Why |
 |---|---|---|
-| RONIN | `deepseek-chat` (DeepSeek) | general-purpose model |
-| VIPER | `deepseek-reasoner` (DeepSeek) | a reasoning-focused model — does the extra deliberation actually help here? |
+| RONIN | `deepseek-v4-flash` (DeepSeek) | cheap, fast |
+| VIPER | `deepseek-v4-flash` (DeepSeek) | same for now — bump to `deepseek-v4-pro` (~3x the cost) once you want the "does extra reasoning depth help" experiment |
 | LYNX | `gpt-oss-20b` (plain Groq) | a genuinely different *provider*, so an outage on one doesn't take out the whole pool |
 
 DeepSeek needs `DEEPSEEK_API_KEY` plus a small amount of prepaid credit at

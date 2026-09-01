@@ -39,10 +39,12 @@ def _today() -> str:
 # else's traffic. "deepseek:<model>" / "openrouter:<model>" prefixes route in
 # llm.llm_chat; no prefix routes straight to Groq. Override any of these via
 # env if you like.
-_RONIN_MODEL = os.getenv("PIT_RONIN_MODEL", "deepseek:deepseek-chat")
-# deepseek-reasoner (R1-style) vs. deepseek-chat (V3, general) — still a real
-# experiment in reasoning style, just no longer tied to OpenRouter's pool.
-_VIPER_MODEL = os.getenv("PIT_VIPER_MODEL", "deepseek:deepseek-reasoner")
+_RONIN_MODEL = os.getenv("PIT_RONIN_MODEL", "deepseek:deepseek-v4-flash")
+# Both default to the cheap model (flash, not pro — pro runs ~3x the cost)
+# while spend is being kept deliberately small. Set PIT_VIPER_MODEL=
+# deepseek:deepseek-v4-pro yourself once you're comfortable with the cost —
+# that's the "different reasoning depth" experiment, just opt-in for now.
+_VIPER_MODEL = os.getenv("PIT_VIPER_MODEL", "deepseek:deepseek-v4-flash")
 # Plain Groq — no prefix routes straight to Groq (see llm.llm_chat) — a
 # second, independent provider alongside DeepSeek.
 _LYNX_MODEL = os.getenv("PIT_LYNX_MODEL", "openai/gpt-oss-20b")
