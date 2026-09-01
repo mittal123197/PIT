@@ -587,7 +587,11 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
     trades = _own_trades(conn, round_id, la["id"])
     old_cfg = json.loads(la["strategy_config"])
     note = _self_reflection(old_cfg.get("notes", ""), trades, return_pct, won=False)
-    new_cfg = {"mode": "autonomous", "notes": note}
+    # Preserve the model across generations — this was dropped for a long
+    # time, silently falling back to decide()'s `model or DEFAULT_MODEL`
+    # (Groq) for every agent that had ever lost even once, regardless of
+    # which model it was actually supposed to run.
+    new_cfg = {"mode": "autonomous", "notes": note, "model": old_cfg.get("model")}
     new_id = conn.execute(
         """INSERT INTO agents (lineage_id, generation, strategy_config,
            activity_profile, rating, seeded_from_trade_agent_id, mutation_note,
