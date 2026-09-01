@@ -17,7 +17,7 @@ import time
 from . import market
 from .config import DEFAULT, MARKET
 from .llm import (AGENT_AWARE, DEFAULT_MODEL, _is_retryable, groq_available,
-                  llm_chat)
+                  groq_recently_rate_limited, llm_chat)
 
 MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "1"))
 
@@ -171,8 +171,17 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
                 if attempt < 2 and (_is_retryable(exc) or malformed):
                     time.sleep(0 if malformed else
                               int(os.getenv("PIT_RATELIMIT_BACKOFF", "15")))
-                    # on the last retry, fall back to Groq so the agent still acts
-                    if attempt == 1 and groq_available():
+                    # On the last retry, rescue an OpenRouter agent onto
+                    # Groq's DEFAULT_MODEL so it still acts — but ONLY if
+                    # Groq itself hasn't been rate-limited recently. A Groq-
+                    # native call (no "openrouter:" prefix) has nowhere else
+                    # to fall back to, and rescuing onto a Groq quota that's
+                    # ALSO already struggling would just pile this agent's
+                    # failure onto the same shared quota a Groq-native agent
+                    # depends on — spreading one provider's outage onto both.
+                    is_cross_provider = active_model.startswith("openrouter:")
+                    if (attempt == 1 and is_cross_provider and groq_available()
+                            and not groq_recently_rate_limited()):
                         active_model = DEFAULT_MODEL
                     continue
                 trace.append({"turn": turn + 1, "model": active_model,

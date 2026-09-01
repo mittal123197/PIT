@@ -50,6 +50,31 @@ def _is_retryable(exc) -> bool:
                                 "temporarily", "overloaded", "503"))
 
 
+# ---- Groq circuit breaker ----------------------------------------------
+# An OpenRouter agent that exhausts its retries used to unconditionally fall
+# back to Groq's DEFAULT_MODEL as a last resort — reasonable for ONE agent
+# having a bad moment, but during a sustained OpenRouter outage (its free
+# ":free" models share a single 20/min, 50/day pool across ALL of
+# OpenRouter's free users — not just us) it meant every OpenRouter agent's
+# traffic quietly spilled onto the SAME Groq quota a Groq-native agent (LYNX)
+# depends on, defeating the whole point of putting it on a separate provider
+# and taking the "safe" agent down too. This tracks whether Groq itself has
+# been rate-limited recently, in-process, so that rescue can be skipped when
+# it would just add to an already-struggling shared quota.
+_last_groq_rate_limit: float = 0.0
+
+
+def note_groq_rate_limited() -> None:
+    global _last_groq_rate_limit
+    import time
+    _last_groq_rate_limit = time.time()
+
+
+def groq_recently_rate_limited(window_s: float = 90.0) -> bool:
+    import time
+    return (time.time() - _last_groq_rate_limit) < window_s
+
+
 def _openrouter_post(model: str, messages: list, temperature: float,
                      use_json_mode: bool) -> str:
     import urllib.request
@@ -101,8 +126,13 @@ def llm_chat(model: str, messages: list, temperature: float = 0.6,
                                 temperature, json_mode)
     kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
     kwargs.update(_extra_for(model))
-    resp = _client().chat.completions.create(
-        model=model, messages=messages, temperature=temperature, **kwargs)
+    try:
+        resp = _client().chat.completions.create(
+            model=model, messages=messages, temperature=temperature, **kwargs)
+    except Exception as exc:
+        if _is_retryable(exc):
+            note_groq_rate_limited()
+        raise
     return resp.choices[0].message.content
 
 

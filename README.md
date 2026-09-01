@@ -182,6 +182,11 @@ web.py / queries.py  ── read-only dashboard over the same DB
   reinforcing what worked.
 - **Ledger is ours.** Every buy/sell — including hard-stop and round-end
   closes — is stored in `trades`, independent of any broker.
+- **Provider outages don't cascade.** An OpenRouter agent that exhausts its
+  retries can fall back to Groq's default model as a last resort — but only
+  if Groq itself hasn't been rate-limited recently. Otherwise every
+  OpenRouter agent's failure would pile onto the same Groq quota a
+  Groq-native agent depends on, spreading one provider's outage onto both.
 
 ## Roadmap
 
