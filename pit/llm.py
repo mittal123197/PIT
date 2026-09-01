@@ -117,13 +117,40 @@ def _openrouter_chat(model: str, messages: list, temperature: float,
         raise
 
 
+# DeepSeek — cheap, paid, OpenAI-compatible. Not a shared/rate-limited free
+# pool like OpenRouter's ":free" models: it's your own metered account, so
+# it doesn't compete with anyone else's traffic. See DEEPSEEK_API_KEY.
+def _deepseek_chat(model: str, messages: list, temperature: float,
+                   json_mode: bool) -> str:
+    import urllib.request
+    body = {"model": model, "messages": messages, "temperature": temperature}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {os.getenv('DEEPSEEK_API_KEY', '')}",
+                 "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=90) as r:
+        data = json.loads(r.read().decode())
+    if "error" in data:
+        err = data["error"]
+        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        raise RuntimeError(f"DeepSeek error: {msg}")
+    return data["choices"][0]["message"]["content"]
+
+
 def llm_chat(model: str, messages: list, temperature: float = 0.6,
              json_mode: bool = True) -> str:
     """Return the assistant message content. `openrouter:<model>` routes to
-    OpenRouter (any frontier model); anything else routes to Groq."""
+    OpenRouter (any frontier model); `deepseek:<model>` routes to DeepSeek's
+    own paid API (not a shared free pool); anything else routes to Groq."""
     if model.startswith("openrouter:"):
         return _openrouter_chat(model[len("openrouter:"):], messages,
                                 temperature, json_mode)
+    if model.startswith("deepseek:"):
+        return _deepseek_chat(model[len("deepseek:"):], messages,
+                              temperature, json_mode)
     kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
     kwargs.update(_extra_for(model))
     try:

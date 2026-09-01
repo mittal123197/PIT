@@ -105,15 +105,21 @@ It's read-only, so it's safe to run against a live DB while a session plays.
 ### The agent pool
 
 Three lineages ship by default, seeded automatically on first use — each a
-deliberately different brain (and, for LYNX, a different *provider*):
+deliberately different brain, split across two real providers:
 
 | Lineage | Model | Why |
 |---|---|---|
-| RONIN | `nemotron-3-super-120b-a12b` (OpenRouter) | general frontier model |
-| VIPER | `ling-3.0-flash-fin` (OpenRouter) | finance-tuned — does domain specialization actually help? |
-| LYNX | `gpt-oss-20b` (plain Groq) | a different *provider* entirely, so a rate-limit/outage on OpenRouter doesn't take out the whole pool |
+| RONIN | `deepseek-chat` (DeepSeek) | general-purpose model |
+| VIPER | `deepseek-reasoner` (DeepSeek) | a reasoning-focused model — does the extra deliberation actually help here? |
+| LYNX | `gpt-oss-20b` (plain Groq) | a genuinely different *provider*, so an outage on one doesn't take out the whole pool |
 
-Override via `PIT_RONIN_MODEL` / `PIT_VIPER_MODEL` / `PIT_LYNX_MODEL`.
+DeepSeek needs `DEEPSEEK_API_KEY` plus a small amount of prepaid credit at
+platform.deepseek.com — cheap, and your own metered account rather than a
+shared free pool. `openrouter:<model>` is still supported (needs
+`OPENROUTER_API_KEY`) if you'd rather use a free-tier frontier model, but its
+`:free` models share one rate-limited pool (20/min, 50/day) across everyone
+using them, which runs dry fast under real usage. Override any of the three
+via `PIT_RONIN_MODEL` / `PIT_VIPER_MODEL` / `PIT_LYNX_MODEL`.
 
 ### Tuning the risk bands
 

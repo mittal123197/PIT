@@ -31,19 +31,20 @@ def _today() -> str:
 
 # ---- seeding two autonomous agents ------------------------------------
 
-# Each agent gets a DIFFERENT brain — same goal, same freedom, different
-# reasoning (and, for LYNX, a different PROVIDER entirely — real infra
-# diversity, not just a different model name). Override with env if you like.
-_RONIN_MODEL = os.getenv("PIT_RONIN_MODEL",
-                         "openrouter:nvidia/nemotron-3-super-120b-a12b:free")
-# A finance-tuned model vs. a general frontier model — a real experiment in
-# whether domain specialization actually helps here.
-_VIPER_MODEL = os.getenv("PIT_VIPER_MODEL",
-                         "openrouter:inclusionai/ling-3.0-flash-fin:free")
-# Plain Groq — no "openrouter:" prefix routes straight to Groq (see
-# llm.llm_chat) — a third, independent PROVIDER. If OpenRouter's free tier
-# has a bad day (seen repeatedly this session: rate limits, malformed JSON,
-# URLErrors), LYNX keeps trading on infra the other two don't share.
+# Each agent gets a DIFFERENT brain on a DIFFERENT provider — not just a
+# different model name, real infra diversity. OpenRouter's free ":free"
+# models share one rate-limited pool across ALL of OpenRouter's free users
+# (20/min, 50/day) — repeatedly exhausted this session — so RONIN and VIPER
+# now run on DeepSeek's own paid API instead: cheap, not shared with anyone
+# else's traffic. "deepseek:<model>" / "openrouter:<model>" prefixes route in
+# llm.llm_chat; no prefix routes straight to Groq. Override any of these via
+# env if you like.
+_RONIN_MODEL = os.getenv("PIT_RONIN_MODEL", "deepseek:deepseek-chat")
+# deepseek-reasoner (R1-style) vs. deepseek-chat (V3, general) — still a real
+# experiment in reasoning style, just no longer tied to OpenRouter's pool.
+_VIPER_MODEL = os.getenv("PIT_VIPER_MODEL", "deepseek:deepseek-reasoner")
+# Plain Groq — no prefix routes straight to Groq (see llm.llm_chat) — a
+# second, independent provider alongside DeepSeek.
 _LYNX_MODEL = os.getenv("PIT_LYNX_MODEL", "openai/gpt-oss-20b")
 
 AUTONOMOUS_SEED = [
