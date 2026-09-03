@@ -138,7 +138,7 @@ two bands always move in lockstep.
 
 | Mode | How | Needs |
 |------|-----|-------|
-| Live, real-time market | `pit.cli live` | `GROQ_API_KEY` (+ `OPENROUTER_API_KEY` for RONIN/VIPER) |
+| Live, real-time market | `pit.cli live` | `GROQ_API_KEY` (+ `DEEPSEEK_API_KEY` for RONIN/VIPER) |
 | Compressed historical replay | `pit.cli live --replay --compress N` | same, + network for yfinance |
 | Day-based forward (positions carry across real calendar days) | `pit.cli forward-start --days 7` then `forward-step` once/day | same |
 | Full market universe (~5,400 tickers, noisier) | `PIT_TRADE_UNIVERSE=full` | — |
@@ -150,11 +150,12 @@ two bands always move in lockstep.
 python3 -m pytest tests/ -v
 ```
 
-67 tests covering: the no-draw resolution cascade, risk-band scaling, both
+84 tests covering: the no-draw resolution cascade, risk-band scaling, both
 hard stop-loss mechanisms, self-reflection learning, shared-guideline
-communication, double-stop-out and passive-win handling, the full pool
-battling simultaneously with N-way ranking, and a real OpenRouter failure
-mode.
+communication, double-stop-out and passive-win handling, no-duplicate-holdings
+enforcement, the full pool battling simultaneously with N-way ranking, real
+OpenRouter/DeepSeek provider failure modes, the Groq circuit breaker, and a
+model getting silently dropped across generations.
 
 ## How it fits together
 
