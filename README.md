@@ -63,8 +63,13 @@ configurable speed for fast iteration.
 ```bash
 cd pit
 pip install -r requirements.txt        # yfinance, groq/openai clients, flask, pytest
-cp .env.example .env                   # add your GROQ_API_KEY (and OPENROUTER_API_KEY if used)
+cp .env.example .env                   # add your GROQ_API_KEY (and DEEPSEEK_API_KEY)
 ```
+
+Want to just run it, with no manual steps to remember each time? See
+[RUNBOOK.md](RUNBOOK.md) — `scripts/run_arena.sh` starts the dashboard, runs
+several battles back-to-back, and prints the standings, all from one
+command.
 
 Run a live session — real-time US market data, every lineage in the pool
 battling the same round together:

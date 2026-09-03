@@ -8,6 +8,8 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/feed_cache/
+data/run_logs/
+data/.dashboard.pid
 pit/data/
 *.sqlite
 *.sqlite3
