@@ -13,7 +13,7 @@ import os
 import time
 from datetime import datetime
 
-from . import autonomous, forward, market
+from . import autonomous, forward, market, replay
 from . import guidelines as gmod
 from .config import CURRENCY, DEFAULT, MARKET, ArenaConfig
 
@@ -73,9 +73,24 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         forward.start_round(conn, config, days=0)  # 0 = time-based; no day-resolve
         rnd = forward._active_round(conn)
     if verbose:
+        # Each lineage's actual starting capital this round is its evolved
+        # stake (round_states.starting_capital, set in forward.start_round
+        # from lineages.current_stake), not the fixed config.base_capital —
+        # that only applies to a lineage's very first-ever round. Printing
+        # base_capital here used to claim "$100,000 paper each" even once
+        # stakes had clearly diverged (a winner's grown, a loser's shrunk),
+        # which is the whole point of the stake mechanic — so show what's
+        # actually staked instead of a number that's wrong after round 1.
+        stakes = sorted(r["starting_capital"] for r in conn.execute(
+            "SELECT starting_capital FROM round_states WHERE round_id=?",
+            (rnd["id"],)).fetchall())
+        if stakes and min(stakes) != max(stakes):
+            stake_txt = f"{CURRENCY}{min(stakes):,.0f}–{CURRENCY}{max(stakes):,.0f} paper (evolved stakes)"
+        else:
+            stake_txt = f"{CURRENCY}{(stakes[0] if stakes else config.base_capital):,.0f} paper each"
         print(f"● LIVE — {MARKET.upper()} market, {minutes} min. Decisions every "
               f"{interval // 60} min, prices marked every {refresh}s. "
-              f"{CURRENCY}{config.base_capital:,.0f} paper each. Watch /live.\n",
+              f"{stake_txt}. Watch /live.\n",
               flush=True)
 
     end = time.time() + minutes * 60
@@ -97,6 +112,23 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         if remaining <= 0:
             break
         time.sleep(min(refresh, remaining))
+
+    # A tick's own LLM decision latency can by itself exceed the whole
+    # session's wall-clock budget (3 agents x multi-turn research calls is
+    # not fast) — when it does, the loop above exits with zero marks ever
+    # having run, and every agent's return is still exactly the value it had
+    # the instant its own order filled (0.00%, since a fill is priced at the
+    # same quote used to compute post-trade value). Resolving straight off
+    # that means the outcome is decided entirely by the trade-count/drawdown
+    # tie-break cascade rather than any actual price movement. One guaranteed
+    # mark-to-market pass here — after the loop, right before resolution —
+    # ensures the round always reflects at least one real price refresh.
+    if decision > 0:
+        try:
+            _refresh_marks(conn, config, rnd, verbose)
+        except Exception as exc:
+            if verbose:
+                print(f"  [final mark error: {exc!r}]", flush=True)
 
     # Resolve for real: winner/loser cascade, ELO, stake, and — the whole
     # point of the arena — mutate the loser into its next generation from the
@@ -184,6 +216,22 @@ def _refresh_marks(conn, config, rnd, verbose):
 
 
 def _tick(conn, config, rnd, tick, verbose, debug=False):
+    # In replay mode, freeze the sim clock for the whole tick: without this,
+    # the real wall-clock time spent on N agents' multi-turn LLM decisions
+    # gets counted as elapsed *market* time too (at compressed speed), which
+    # both (a) can race the clock past end-of-day mid-tick, freezing every
+    # later mark-to-market refresh on the day's last bar, and (b) means
+    # whichever agent gets decided last would see a later simulated instant
+    # than the first — contradicting "every agent trades the same round, at
+    # the same time." No-op outside replay mode. See replay.pause().
+    replay.pause()
+    try:
+        _tick_body(conn, config, rnd, tick, verbose, debug)
+    finally:
+        replay.resume()
+
+
+def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     price = _price_fn()
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}

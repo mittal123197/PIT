@@ -139,8 +139,41 @@ def stop() -> None:
 def sim_now() -> datetime | None:
     if not _STATE or _STATE.get("start_wall") is None:
         return None  # clock not anchored yet — nobody has looked up a ticker
-    elapsed = (time.time() - _STATE["start_wall"]) * _STATE["speed"]
+    wall_now = _STATE.get("paused_at") or time.time()
+    elapsed = (wall_now - _STATE["start_wall"]) * _STATE["speed"]
     return _STATE["sim_start"] + timedelta(seconds=elapsed)
+
+
+def pause() -> None:
+    """Freeze the sim clock's advance. Call before any real-time-expensive,
+    non-market work (an agent's multi-turn LLM decision loop, in practice) so
+    that latency there doesn't silently burn simulated market time.
+
+    Without this, the clock keeps advancing at `speed`x for however long the
+    LLM calls actually take in the real world — at 90x+ speeds, a single
+    slow multi-agent tick can burn hours of simulated time before the tick
+    even finishes, blowing straight past end-of-day and leaving every
+    subsequent price lookup (including mark-to-market refreshes) frozen on
+    the day's last bar for the rest of the session. It also means, within
+    one nominal tick, agents queried later would see a different simulated
+    instant than agents queried earlier — silently breaking "every agent
+    trades the same round, at the same time." Pausing keeps the whole tick
+    pinned to one consistent instant. No-op if the clock isn't anchored yet
+    or is already paused.
+    """
+    if not _STATE or _STATE.get("start_wall") is None or _STATE.get("paused_at") is not None:
+        return
+    _STATE["paused_at"] = time.time()
+
+
+def resume() -> None:
+    """Undo pause(): shift the clock's origin forward by however long it was
+    paused, so no simulated time is counted as having passed while paused."""
+    if not _STATE or _STATE.get("paused_at") is None:
+        return
+    paused_for = time.time() - _STATE["paused_at"]
+    _STATE["start_wall"] += paused_for
+    _STATE["paused_at"] = None
 
 
 def is_finished() -> bool:
