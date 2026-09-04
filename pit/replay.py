@@ -41,17 +41,25 @@ def load_day(tickers: list[str] | None = None,
     return _load_tickers(tickers, day or _last_trading_day())
 
 
-def _load_tickers(tickers: list[str], day: date) -> dict:
+def _download(tickers: list[str], day: date):
     import yfinance as yf
-    # yfinance intraday needs a small window; request a couple days and filter.
     start = day.isoformat()
     end = (day + timedelta(days=1)).isoformat()
-    print(f"[replay] loading {len(tickers)} tickers for {day} (5-min bars)...",
-          flush=True)
-    df = yf.download(tickers, start=start, end=end, interval="5m",
-                     progress=False, auto_adjust=True, timeout=30)
-    if df is None or df.empty:
-        raise RuntimeError(f"no intraday data available for {day}")
+    # threads=False: yfinance's default is to fire one thread per ticker,
+    # which for a 150-ticker scan means ~150 near-simultaneous requests to
+    # Yahoo's API — exactly the burst pattern that gets a chunk of them
+    # throttled back with no data (yfinance's own error message for that is
+    # the misleading "possibly delisted", even for large, very-much-listed
+    # names like HON or SLB). Sequential requests are slower wall-clock, but
+    # that's no longer a real cost here — the replay clock is paused for the
+    # whole tick regardless (see pause()/resume()), so slower fetching
+    # doesn't burn simulated market time either.
+    return yf.download(tickers, start=start, end=end, interval="5m",
+                       progress=False, auto_adjust=True, timeout=30,
+                       threads=False)
+
+
+def _extract_series(df, tickers: list[str]) -> dict:
     close = df["Close"]
     series = {}
     for t in tickers:
@@ -62,6 +70,28 @@ def _load_tickers(tickers: list[str], day: date) -> dict:
                              for idx, v in s.items()]
         except (KeyError, AttributeError):
             continue
+    return series
+
+
+def _load_tickers(tickers: list[str], day: date) -> dict:
+    print(f"[replay] loading {len(tickers)} tickers for {day} (5-min bars)...",
+          flush=True)
+    df = _download(tickers, day)
+    if df is None or df.empty:
+        raise RuntimeError(f"no intraday data available for {day}")
+    series = _extract_series(df, tickers)
+
+    # A request this size routinely drops a handful of tickers to Yahoo's own
+    # throttling, not real data gaps — retry just the misses once, after a
+    # short pause, rather than silently losing real, tradeable names every
+    # single call.
+    missing = [t for t in tickers if t not in series]
+    if missing and len(missing) < len(tickers):
+        time.sleep(2.0)
+        retry_df = _download(missing, day)
+        if retry_df is not None and not retry_df.empty:
+            series.update(_extract_series(retry_df, missing))
+
     if series:
         print(f"[replay] loaded {len(series)} ticker(s), "
               f"{len(next(iter(series.values())))} bars each", flush=True)
@@ -229,9 +259,19 @@ def _replay_scan(n: int = 12, sample_size: int = 150,
     if not sample:
         return {"gainers": [], "losers": [],
                 "note": "full-market universe unreachable this call"}
-    got = _load_tickers(sample, day)
-    for t, series in got.items():  # warm the cache for later single lookups
-        _STATE.setdefault("series", {})[t] = series
+    cache = _STATE.setdefault("series", {})
+    # Every agent scans its own independent random sample each tick, and
+    # those samples overlap heavily by chance (150 of ~500 names, drawn 3x a
+    # tick) — re-downloading a ticker another agent already fetched THIS
+    # replay just adds pointless load that's part of what was tripping
+    # Yahoo's throttling. A ticker's whole day of bars is already final and
+    # cached the first time it's loaded, so reusing it is exact, not stale.
+    to_fetch = [t for t in sample if t not in cache and t not in _STATE.get("missing", set())]
+    fetched = _load_tickers(to_fetch, day) if to_fetch else {}
+    for t, series in fetched.items():
+        cache[t] = series
+    _STATE.setdefault("missing", set()).update(t for t in to_fetch if t not in fetched)
+    got = {t: cache[t] for t in sample if t in cache}
     if _STATE.get("start_wall") is None and got:
         first = next(iter(got.values()))
         _anchor_clock(first[0][0], first[-1][0])
