@@ -81,6 +81,28 @@ PID_FILE="$SCRIPT_DIR/data/.dashboard.pid"
 
 log() { echo "$@" | tee -a "$RUN_LOG"; }
 
+# ---- refuse to run two battle-runners at once against the same DB ----
+# Two `pit.cli live` processes deciding trades for the same active round
+# simultaneously isn't just a SQLite-contention risk (both writing the same
+# tables) — it's a logic error: the round model assumes one writer. Caught
+# for real running two of these scripts at once, which surfaced as an
+# `OperationalError('unable to open database file')` mid-battle in one of
+# them once both were hammering data/pit.db concurrently.
+LOCK_FILE="$SCRIPT_DIR/data/.run_arena.lock"
+mkdir -p "$SCRIPT_DIR/data"
+if [[ -f "$LOCK_FILE" ]]; then
+  other_pid="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+  if [[ -n "$other_pid" ]] && kill -0 "$other_pid" 2>/dev/null; then
+    echo "⚠️  Another run_arena.sh is already running (pid $other_pid)." >&2
+    echo "   Running two at once against the same data/pit.db corrupts the active round." >&2
+    echo "   Wait for it to finish, or if it's actually dead, remove $LOCK_FILE and retry." >&2
+    exit 1
+  fi
+  # stale lock from a killed/crashed run — safe to take over
+fi
+echo $$ > "$LOCK_FILE"
+trap 'rm -f "$LOCK_FILE"' EXIT
+
 log "PIT arena runner — mode=$MODE battles=$BATTLES $(date '+%Y-%m-%d %H:%M:%S')"
 log "Full log: $RUN_LOG"
 

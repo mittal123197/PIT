@@ -259,8 +259,22 @@ def cmd_leaderboard(args):
 def cmd_history(args):
     conn = dbm.connect()
     dbm.init_db(conn)
-    where = "WHERE round_id=?" if args.round else ""
-    params = (args.round,) if args.round else ()
+    # --round takes the user-facing round NUMBER (the "R<n>" this same command
+    # prints below, and what the leaderboard/dashboard show) — resolve it to
+    # the internal rounds.id ourselves. Filtering directly on the id used to
+    # silently return nothing whenever the two diverged (they're only equal
+    # by coincidence; ids are a plain autoincrement, round_number is the
+    # sequential label), which reads as "no trades" rather than "wrong id".
+    round_id = None
+    if args.round:
+        row = conn.execute("SELECT id FROM rounds WHERE round_number=?",
+                           (args.round,)).fetchone()
+        if not row:
+            print(f"No round numbered {args.round} found.")
+            return
+        round_id = row["id"]
+    where = "WHERE r.id=?" if round_id else ""
+    params = (round_id,) if round_id else ()
     results = conn.execute(
         f"""SELECT r.round_number, rr.resolution_reason, rr.winner_return_pct,
                    rr.loser_return_pct, wl.name win, ll.name lose
@@ -270,7 +284,7 @@ def cmd_history(args):
             JOIN agents la ON la.id = rr.loser_agent_id
             JOIN lineages wl ON wl.id = wa.lineage_id
             JOIN lineages ll ON ll.id = la.lineage_id
-            {where.replace('round_id', 'r.id')}
+            {where}
             ORDER BY r.round_number""",
         params,
     ).fetchall()
@@ -280,18 +294,19 @@ def cmd_history(args):
         print(f"  R{row['round_number']:>2}  {row['win']:<14} beat {row['lose']:<14} "
               f"[{row['resolution_reason']}]  {row['winner_return_pct']:+.2f}% vs "
               f"{row['loser_return_pct']:+.2f}%")
-    if args.round:
+    if round_id:
         trades = conn.execute(
             """SELECT t.ts, l.name, t.symbol, t.side, t.qty, t.price, t.reason
                FROM trades t JOIN agents a ON a.id=t.agent_id
                JOIN lineages l ON l.id=a.lineage_id
                WHERE t.round_id=? ORDER BY t.id""",
-            (args.round,),
+            (round_id,),
         ).fetchall()
         print(f"\nTrades in round {args.round}")
         print("-" * 68)
         for t in trades:
-            print(f"  {t['name']:<14} {t['side']:<4} {t['qty']:>6.0f} {t['symbol']:<12} "
+            ts = t["ts"][11:19] if t["ts"] and "T" in t["ts"] else (t["ts"] or "")
+            print(f"  {ts:<8} {t['name']:<14} {t['side']:<4} {t['qty']:>6.0f} {t['symbol']:<12} "
                   f"@ {t['price']:>8.2f}  {t['reason'] or ''}")
 
 
@@ -388,7 +403,9 @@ def main(argv=None):
     lv.set_defaults(func=cmd_live)
 
     ph = sub.add_parser("history", help="show round results / trades")
-    ph.add_argument("--round", type=int, help="show trades for this round id")
+    ph.add_argument("--round", type=int,
+                    help="show trades for this round number (the R<n> shown "
+                         "in the results list, not the internal db id)")
     ph.set_defaults(func=cmd_history)
 
     args = p.parse_args(argv)

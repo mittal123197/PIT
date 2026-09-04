@@ -151,12 +151,13 @@
 <div class="panel">
   <table>
     <thead><tr>
-      <th>Lineage</th><th>Side</th><th>Qty</th><th>Symbol</th><th>Price</th>
+      <th>Time</th><th>Lineage</th><th>Side</th><th>Qty</th><th>Symbol</th><th>Price</th>
       <th class="hide-sm">Cash after</th><th class="hide-sm">Reason</th>
     </tr></thead>
     <tbody>
     {% for t in trades %}
       <tr>
+        <td class="mono muted">{{ t.ts[11:19] if 'T' in t.ts else t.ts }}</td>
         <td class="agentname">{{ t.lineage }}</td>
         <td><span class="pill {{ 'win' if t.side == 'buy' else 'lose' }}">{{ t.side }}</span></td>
         <td class="mono">{{ '%.0f'|format(t.qty) }}</td>
@@ -166,7 +167,7 @@
         <td class="muted hide-sm" style="font-size:12px;">{{ t.reason or '' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="muted" style="padding:22px;">No trades in this round.</td></tr>
+      <tr><td colspan="8" class="muted" style="padding:22px;">No trades in this round.</td></tr>
     {% endfor %}
     </tbody>
   </table>

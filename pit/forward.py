@@ -430,7 +430,13 @@ def _resolve(conn, rnd, config, price) -> dict:
         # final_return_pct built on a PAPER mark of positions nobody actually
         # sold is not a realized result. No-op for an agent already fully in
         # cash (e.g. already stopped/goal-hit earlier in the round).
-        close_out_all_positions(conn, rnd["id"], aid, st, price, _now())
+        # Local wall-clock time, not _now()'s UTC ISO — every other trade
+        # this round (fills, messages, audit) already uses datetime.now()
+        # (see _persist_audit in live.py), so a round-end close-out stamped
+        # in UTC showed up hours earlier than the ticks that preceded it in
+        # the same trade ledger (e.g. "08:50" right after fills at "14:15").
+        close_out_ts = datetime.now().strftime("%H:%M:%S")
+        close_out_all_positions(conn, rnd["id"], aid, st, price, close_out_ts)
         h = json.loads(st["holdings"])
         total = st["current_capital"] + sum(q * (price(t) or 0) for t, q in h.items())
         ret = (total / st["starting_capital"] - 1) * 100
