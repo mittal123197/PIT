@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 
 from .config import DEFAULT
 
@@ -164,24 +165,58 @@ def lineage_detail(conn: sqlite3.Connection, lineage_id: int) -> dict | None:
     }
 
 
+def _fmt_duration(start_iso: str, end_iso: str) -> str | None:
+    """Wall-clock duration between two forward._now()-style UTC ISO
+    timestamps, as a compact "Xd Yh" / "Yh Zm" / "Zm" / "Zs" string. Used for
+    "how long did the latest round actually take" — length_days alone reads
+    as "—" for every live/replay session (length_days=0 is their "time-based,
+    not a real day count" sentinel), which is most rounds in practice, so a
+    bare day-count is the wrong unit almost all the time."""
+    try:
+        start = datetime.fromisoformat(start_iso)
+        end = datetime.fromisoformat(end_iso)
+    except (TypeError, ValueError):
+        return None
+    secs = (end - start).total_seconds()
+    if secs < 0:
+        return None
+    secs = int(secs)
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{seconds}s"
+
+
 def arena_summary(conn: sqlite3.Connection) -> dict:
     total = conn.execute("SELECT COUNT(*) c FROM rounds").fetchone()["c"]
     resolved = conn.execute(
         "SELECT COUNT(*) c FROM rounds WHERE status='resolved'").fetchone()["c"]
     trades = conn.execute("SELECT COUNT(*) c FROM trades").fetchone()["c"]
     lineages = conn.execute("SELECT COUNT(*) c FROM lineages").fetchone()["c"]
-    last_len = conn.execute(
-        "SELECT length_days FROM rounds ORDER BY round_number DESC LIMIT 1"
+    # Actual wall-clock time the latest RESOLVED round took, from its own
+    # start to its own resolution — works the same for a 6-minute replay
+    # session and a real 7-day forward round, unlike length_days (which is
+    # 0, a sentinel, for every live/replay session).
+    last_round = conn.execute(
+        """SELECT r.created_at AS started, rr.created_at AS resolved
+           FROM rounds r JOIN round_results rr ON rr.round_id = r.id
+           WHERE r.status='resolved'
+           ORDER BY r.round_number DESC LIMIT 1"""
     ).fetchone()
-    # length_days=0 is the "time-based session" sentinel (live/replay), not a
-    # real day count — don't surface it as one.
-    days = last_len["length_days"] if last_len else None
+    duration = (_fmt_duration(last_round["started"], last_round["resolved"])
+               if last_round else None)
     return {
         "total_rounds": total,
         "resolved_rounds": resolved,
         "total_trades": trades,
         "lineages": lineages,
-        "last_round_days": days if days else None,
+        "last_round_duration": duration,
     }
 
 

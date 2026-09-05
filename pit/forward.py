@@ -499,16 +499,35 @@ def _resolve(conn, rnd, config, price) -> dict:
     else:
         notes[winner_id] = _reflect_winner(conn, rnd["id"], agents_by_id[winner_id],
                                            summaries[winner_id].return_pct)
+    # Winning the round and actually making money are different things —
+    # the base bonus below pays out even when 1st just lost the least. This
+    # extra only fires on a genuinely positive return, and it's funded by
+    # redistribution (see the losers' loop below), not printed for free.
+    positive_delta_bonus = (config.win_positive_delta_bonus_pct
+                            if not all_stopped_out and summaries[winner_id].return_pct > 0
+                            else 0.0)
     wd = (config.passive_win_stake_bonus_pct if passive_win
          else config.win_stake_bonus_pct) / 100.0
-    stake_mult[winner_id] = 1 + wd
+    stake_mult[winner_id] = 1 + wd + positive_delta_bonus / 100.0
     _apply_lineage(conn, agents_by_id[winner_id]["lineage_id"],
                    summaries[winner_id].return_pct, True, stake_mult[winner_id])
 
-    for aid in ranking[1:]:
-        is_last = aid == loser_id
-        penalty_pct = (config.loss_stake_penalty_pct if is_last
-                      else config.middle_place_penalty_pct)
+    # Base penalty per loser, computed before redistribution — dead last
+    # takes the full penalty, anyone strictly in the middle takes a smaller
+    # one. The winner's positive_delta_bonus above (if any) is then split
+    # across these ranks in proportion to each one's OWN base penalty, so
+    # last (already penalized more) absorbs proportionally more of it too —
+    # never all dumped onto one rank, and this naturally generalizes past 3
+    # participants instead of hardcoding "2nd and 3rd."
+    losers = ranking[1:]
+    base_penalty = {aid: (config.loss_stake_penalty_pct if aid == loser_id
+                          else config.middle_place_penalty_pct)
+                    for aid in losers}
+    total_base_penalty = sum(base_penalty.values())
+    for aid in losers:
+        share = (base_penalty[aid] / total_base_penalty) if total_base_penalty else (
+            1.0 / len(losers) if losers else 0.0)
+        penalty_pct = base_penalty[aid] + positive_delta_bonus * share
         stake_mult[aid] = 1 - penalty_pct / 100.0
         notes[aid] = _reflect_loser(conn, rnd["id"], agents_by_id[aid],
                                     agents_by_id[aid]["rating"] + net_delta[aid],

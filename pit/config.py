@@ -111,6 +111,16 @@ class ArenaConfig:
     # in between (2nd of 3, 2nd/3rd of 4, ...) is still a loser — it didn't
     # win — but punished less harshly than dead last.
     middle_place_penalty_pct: float = _env_float("PIT_MIDDLE_PLACE_PENALTY_PCT", 8.0)
+    # Winning the round (best of the pool) and actually making money are two
+    # different things — the base win_stake_bonus_pct above pays out even
+    # when 1st place merely lost the least. This extra bonus only fires when
+    # 1st place's own return was genuinely positive, and it's funded by
+    # redistribution, not printed: it's pulled from every other rank's own
+    # penalty, split in proportion to how big each rank's penalty already is
+    # (dead last, already penalized more, absorbs proportionally more of it
+    # too) — never dumped entirely onto one rank, and never on top of the
+    # existing penalty for free.
+    win_positive_delta_bonus_pct: float = _env_float("PIT_WIN_POSITIVE_DELTA_BONUS_PCT", 5.0)
 
     # Per-POSITION hard stop — separate from the portfolio-level one above.
     # Without this, one stock collapsing inside an otherwise-fine book just

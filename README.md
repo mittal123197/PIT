@@ -50,7 +50,12 @@ the pool trades the same round, at the same time.
   but takes a smaller penalty. A win earned on zero trades — a deliberate
   all-cash hold, or a failed decision call — gets a capped bonus. If the
   whole pool gets stopped out together, nobody reinforces; everyone
-  self-critiques.
+  self-critiques. Beating the pool and actually making money are different
+  things: 1st place gets an extra +5% only when its own return was
+  genuinely positive, not just "lost the least" — funded by redistribution,
+  not printed, taken from every other rank in proportion to that rank's own
+  penalty (dead last, already penalized more, absorbs proportionally more
+  of it too — never dumped entirely onto one rank).
 - **No draws, ever.** A tie-break cascade (return → fewer trades → lower
   drawdown → deterministic agent-id order) always yields a full ranking.
 

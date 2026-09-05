@@ -102,8 +102,16 @@ def test_middle_place_penalty_is_smaller_than_last_place(monkeypatch):
 
     viper_stake = conn.execute("SELECT current_stake FROM lineages WHERE name='VIPER'").fetchone()["current_stake"]
     lynx_stake = conn.execute("SELECT current_stake FROM lineages WHERE name='LYNX'").fetchone()["current_stake"]
-    viper_expected = 100_000 * (1 - config.middle_place_penalty_pct / 100)
-    lynx_expected = 100_000 * (1 - config.loss_stake_penalty_pct / 100)
+    # RONIN's return here (+5.0%) is genuinely positive, so the winner's
+    # extra positive-delta bonus is in play too — redistributed across
+    # VIPER/LYNX in proportion to each's own base penalty (see
+    # forward._resolve's docstring on the redistribution).
+    total_base = config.middle_place_penalty_pct + config.loss_stake_penalty_pct
+    extra = config.win_positive_delta_bonus_pct
+    viper_penalty = config.middle_place_penalty_pct + extra * config.middle_place_penalty_pct / total_base
+    lynx_penalty = config.loss_stake_penalty_pct + extra * config.loss_stake_penalty_pct / total_base
+    viper_expected = 100_000 * (1 - viper_penalty / 100)
+    lynx_expected = 100_000 * (1 - lynx_penalty / 100)
     assert viper_stake == round(viper_expected, 2)
     assert lynx_stake == round(lynx_expected, 2)
     assert viper_stake > lynx_stake  # middle punished less than last
@@ -123,7 +131,10 @@ def test_winner_gets_full_bonus_and_both_others_count_as_losses(monkeypatch):
     assert ronin["wins"] == 1 and ronin["losses"] == 0
     assert viper["wins"] == 0 and viper["losses"] == 1   # middle IS a loss
     assert lynx["wins"] == 0 and lynx["losses"] == 1
-    assert ronin["current_stake"] == round(100_000 * (1 + config.win_stake_bonus_pct / 100), 2)
+    # RONIN's return here (+5.0%) is genuinely positive, not just "lost the
+    # least" — the extra positive-delta bonus applies on top of the base.
+    assert ronin["current_stake"] == round(
+        100_000 * (1 + (config.win_stake_bonus_pct + config.win_positive_delta_bonus_pct) / 100), 2)
 
 
 def test_round_rankings_captures_every_participant(monkeypatch):

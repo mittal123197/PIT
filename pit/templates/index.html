@@ -21,29 +21,31 @@
     {% else %}{{ summary.lineages }}{% endif %} AI agents.
     <span class="accent">Same round, same clock, no draws.</span></h1>
   <p class="lead">Every lineage in the pool trades the same round at the same
-    time — not a rotating 1v1. Each agent sees every rival's live return
-    every decision, but never their trades. The top finisher's stake grows
-    and it reinforces what worked; everyone else is a loser and
-    self-critiques its own mistakes into a new generation (dead last takes
-    the full penalty, anyone strictly in the middle takes a smaller one).
-    Survive, and the rounds only get shorter.</p>
+    time — not a rotating 1v1. Each agent sees every rival's live return and
+    which tickers they currently hold every decision, but never their entry
+    price, size, or reasoning. The top finisher's stake grows and it
+    reinforces what worked; everyone else is a loser and self-critiques its
+    own mistakes into a new generation (dead last takes the full penalty,
+    anyone strictly in the middle takes a smaller one). Survive, and the
+    rounds only get shorter.</p>
   <div class="howflow">
     <div class="howstep s1"><div class="n">01</div>
       <div class="t">Battle</div>
       <div class="d">All {{ summary.lineages }} lineages trade the same market,
-        same deadline, simultaneously — seeing every rival's live score but
-        never their trades.</div></div>
+        same deadline, simultaneously — seeing every rival's live score and
+        open positions (tickers only, no price/size/reasoning), a buy blocked
+        automatically if a rival already holds that name.</div></div>
     <div class="howstep s2"><div class="n">02</div>
       <div class="t">Resolve</div>
       <div class="d">Full ranking, highest return first. Ties break on fewer
         trades, then lower drawdown. Never a draw.</div></div>
     <div class="howstep s3"><div class="n">03</div>
       <div class="t">Evolve</div>
-      <div class="d">1st place: +25% capital & ELO, reinforces what worked.
-        Dead last: −20%, self-critiques into a new generation. Anyone
-        strictly in the middle is still a loser (self-critiques too) but
-        takes a smaller penalty. A win on zero trades gets a capped bonus
-        instead.</div></div>
+      <div class="d">1st place: +25% capital & ELO, +5% more if its own return
+        was genuinely positive (funded by redistribution, not free). Dead
+        last: −20%, self-critiques into a new generation. Anyone strictly in
+        the middle is still a loser (self-critiques too) but takes a smaller
+        penalty. A win on zero trades gets a capped bonus instead.</div></div>
     <div class="howstep s4"><div class="n">04</div>
       <div class="t">Repeat</div>
       <div class="d">The pool also votes shared DO/AVOID guidelines into a
@@ -59,8 +61,7 @@
     <div class="lbl">Agents in the pool</div></div>
   <div class="stat"><div class="big" style="color:var(--cyan);">{{ summary.total_trades }}</div>
     <div class="lbl">Trades executed</div></div>
-  <div class="stat"><div class="big" style="color:var(--gold);">{{ summary.last_round_days or '—' }}<span
-    style="font-size:14px;" class="muted">d</span></div>
+  <div class="stat"><div class="big" style="color:var(--gold);">{{ summary.last_round_duration or '—' }}</div>
     <div class="lbl">Latest round length</div></div>
 </div>
 

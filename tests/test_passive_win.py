@@ -74,7 +74,11 @@ def test_genuine_active_winner_still_gets_the_full_bonus(monkeypatch):
 
     assert outcome["passive_win"] is False
     stake = conn.execute("SELECT current_stake FROM lineages WHERE name='RONIN'").fetchone()["current_stake"]
-    assert stake == round(100000 * (1 + config.win_stake_bonus_pct / 100), 2)
+    # RONIN's return here is +5% (105000 vs 100000 starting) — genuinely
+    # positive, not just "lost the least" — so the extra positive-delta
+    # bonus is in play on top of the base win bonus (see forward._resolve).
+    assert stake == round(
+        100000 * (1 + (config.win_stake_bonus_pct + config.win_positive_delta_bonus_pct) / 100), 2)
 
 
 def test_passive_win_note_flags_it_instead_of_fabricating_a_story(monkeypatch):
