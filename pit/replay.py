@@ -66,7 +66,9 @@ def _extract_series(df, tickers: list[str]) -> dict:
         try:
             s = close[t].dropna() if hasattr(close, "columns") else close.dropna()
             if len(s) > 0:
-                series[t] = [(idx.to_pydatetime(), round(float(v), 2))
+                # 8 decimals, not 2 — see market._round_price: 2 rounds a
+                # sub-cent crypto price (e.g. SHIB-USD) straight to 0.0.
+                series[t] = [(idx.to_pydatetime(), market._round_price(v))
                              for idx, v in s.items()]
         except (KeyError, AttributeError):
             continue
@@ -284,7 +286,7 @@ def _replay_scan(n: int = 12, sample_size: int = 150,
         price = _price_at(series, now)
         first_price = series[0][1]
         if first_price:
-            rows.append({"ticker": t, "price": round(price, 2),
+            rows.append({"ticker": t, "price": market._round_price(price),
                         "change_pct": round((price / first_price - 1) * 100, 2)})
     rows.sort(key=lambda r: r["change_pct"], reverse=True)
     return {"gainers": rows[:n], "losers": list(reversed(rows[-n:])),

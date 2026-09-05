@@ -140,17 +140,46 @@ def _deepseek_chat(model: str, messages: list, temperature: float,
     return data["choices"][0]["message"]["content"]
 
 
+# Ollama — local, no key, no cost, no network. Uses Ollama's OpenAI-compatible
+# endpoint (same request/response shape as DeepSeek's above). Slower than a
+# hosted API on modest hardware and the timeout is set accordingly. PIT_OLLAMA_HOST
+# lets this point at a non-default host/port if Ollama isn't on 127.0.0.1:11434.
+def _ollama_chat(model: str, messages: list, temperature: float,
+                 json_mode: bool) -> str:
+    import urllib.request
+    host = os.getenv("PIT_OLLAMA_HOST", "http://localhost:11434")
+    body = {"model": model, "messages": messages, "temperature": temperature,
+           "stream": False}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    req = urllib.request.Request(
+        f"{host.rstrip('/')}/v1/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as r:
+        data = json.loads(r.read().decode())
+    if "error" in data:
+        err = data["error"]
+        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+        raise RuntimeError(f"Ollama error: {msg}")
+    return data["choices"][0]["message"]["content"]
+
+
 def llm_chat(model: str, messages: list, temperature: float = 0.6,
              json_mode: bool = True) -> str:
     """Return the assistant message content. `openrouter:<model>` routes to
     OpenRouter (any frontier model); `deepseek:<model>` routes to DeepSeek's
-    own paid API (not a shared free pool); anything else routes to Groq."""
+    own paid API (not a shared free pool); `ollama:<model>` routes to a local
+    Ollama server; anything else routes to Groq."""
     if model.startswith("openrouter:"):
         return _openrouter_chat(model[len("openrouter:"):], messages,
                                 temperature, json_mode)
     if model.startswith("deepseek:"):
         return _deepseek_chat(model[len("deepseek:"):], messages,
                               temperature, json_mode)
+    if model.startswith("ollama:"):
+        return _ollama_chat(model[len("ollama:"):], messages,
+                            temperature, json_mode)
     kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
     kwargs.update(_extra_for(model))
     try:

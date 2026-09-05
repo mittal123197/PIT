@@ -206,7 +206,7 @@ def cmd_live(args):
             replay.stop()
     else:
         live.run_live(conn, minutes=args.minutes, interval=args.interval,
-                      debug=args.debug)
+                      refresh=args.refresh, debug=args.debug)
 
 
 def cmd_forward_status(args):

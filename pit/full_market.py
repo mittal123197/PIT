@@ -115,14 +115,37 @@ def sp500_universe(force_refresh: bool = False) -> list[dict]:
     return rows or (_SP500_CACHE["tickers"] or [])
 
 
+# A curated list of liquid crypto pairs in Yahoo Finance's own "-USD" ticker
+# format (verified real symbols, not invented) — there's no equivalent of the
+# NASDAQ mirror or a published index for crypto, so unlike the two equity
+# modes above this is a fixed, hand-picked list rather than fetched. Small
+# enough that `random_sample` below just returns the whole thing every call
+# (its usual sample_size of 150 exceeds this list) — genuine full coverage
+# every scan, not a subset, which is the right behavior for a universe this
+# size anyway.
+_CRYPTO_UNIVERSE: list[dict] = [
+    {"symbol": s, "name": s.replace("-USD", ""), "sector": "Crypto"} for s in (
+        "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD", "ADA-USD",
+        "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD",
+        "ATOM-USD", "XLM-USD", "ETC-USD", "FIL-USD", "APT-USD", "ARB-USD",
+        "OP-USD", "NEAR-USD", "ICP-USD", "HBAR-USD", "VET-USD", "ALGO-USD",
+        "AAVE-USD", "MKR-USD", "SAND-USD", "MANA-USD", "EOS-USD", "XTZ-USD",
+        "TRX-USD", "SHIB-USD",
+    )
+]
+
+
 def universe_for(mode: str) -> list[dict]:
     """mode: 'full' (every NASDAQ/NYSE/AMEX common stock, thousands of
-    tickers, includes illiquid/delisted noise) or 'top500' (S&P 500
+    tickers, includes illiquid/delisted noise), 'top500' (S&P 500
     constituents only — real and published, quality-filtered but still
-    genuinely diverse). Falls back to 'full' if the S&P mirror is down."""
+    genuinely diverse), or 'crypto' (a fixed curated list of liquid pairs —
+    see _CRYPTO_UNIVERSE). Falls back to 'full' if the S&P mirror is down."""
     if mode == "top500":
         pool = sp500_universe()
         return pool or full_universe()
+    if mode == "crypto":
+        return _CRYPTO_UNIVERSE
     return full_universe()
 
 

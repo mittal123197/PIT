@@ -123,6 +123,19 @@ def _pct(v) -> float | None:
     return round(v * 100, 2) if isinstance(v, (int, float)) else None
 
 
+def _round_price(v) -> float:
+    """Round an asset PRICE (not a percentage, not an aggregate dollar
+    value) to 8 decimals, not 2. 2 decimals is fine for equities but rounds
+    a sub-cent crypto token (SHIB-USD is ~$0.000009) straight down to a flat
+    0.0 — which then makes every downstream use of that price (scan/history
+    display, and critically the actual fill price in forward._execute) treat
+    the asset as worthless, silently turning every buy/sell of it into a
+    no-op. 8 decimals is the standard crypto convention (satoshi-level) and
+    doesn't change anything for equities — display code that wants exactly
+    2 decimals still gets that at print time (e.g. cli.py's `:.2f`)."""
+    return round(float(v), 8)
+
+
 def movers(n: int = 12, reference: list[str] | None = None) -> dict:
     if _use_alpaca():
         m = _alpaca_movers(n)
@@ -224,7 +237,7 @@ def _history_cached(ticker: str, period: str, day_key: str) -> tuple:
         if hasattr(close, "columns"):
             close = close.iloc[:, 0]
         close = close.dropna()
-        return tuple((idx.date().isoformat(), round(float(v), 2))
+        return tuple((idx.date().isoformat(), _round_price(float(v)))
                      for idx, v in close.items())
     except Exception:
         return ()
@@ -246,25 +259,57 @@ def _yf_quote(ticker: str) -> dict | None:
             "asof": h[-1][0]}
 
 
+def _movers_download(tickers: list[str], period: str, interval: str, timeout: int):
+    yf = _yf()
+    # threads=False: yfinance's default is one thread per ticker, which for a
+    # bulk request is exactly the burst pattern that gets a chunk of them
+    # throttled/timed-out by Yahoo with no data — see the matching fix in
+    # replay.py's _load_tickers for the full writeup (same root cause, this
+    # is the live/real-time code path's version of it).
+    return yf.download(tickers, period=period, interval=interval,
+                       progress=False, auto_adjust=True, timeout=timeout,
+                       threads=False)
+
+
+def _extract_closes(df, tickers: list[str]) -> dict[str, tuple[float, float]]:
+    out = {}
+    try:
+        close = df["Close"]
+    except Exception:
+        return out
+    for t in tickers:
+        try:
+            s = close[t].dropna() if hasattr(close, "columns") else close.dropna()
+            if len(s) >= 2:
+                out[t] = (float(s.iloc[-1]), float(s.iloc[-2]))
+        except Exception:
+            continue
+    return out
+
+
 @functools.lru_cache(maxsize=8)
 def _movers_cached(day_key: str, ref: tuple[str, ...], n: int) -> tuple:
-    yf = _yf()
-    rows = []
+    tickers = list(ref)
     try:
-        df = yf.download(list(ref), period="7d", interval="1d",
-                         progress=False, auto_adjust=True, timeout=15)
-        close = df["Close"]
-        for t in ref:
-            try:
-                s = close[t].dropna() if hasattr(close, "columns") else close.dropna()
-                if len(s) >= 2:
-                    price, prev = float(s.iloc[-1]), float(s.iloc[-2])
-                    rows.append({"ticker": t, "price": round(price, 2),
-                                 "change_pct": round((price / prev - 1) * 100, 2)})
-            except Exception:
-                continue
+        df = _movers_download(tickers, "7d", "1d", 15)
     except Exception:
         return ((), ())
+    prices = _extract_closes(df, tickers)
+
+    # A bulk request this size routinely drops a handful to Yahoo's own
+    # throttling/timeouts, not real data gaps — retry just the misses once.
+    missing = [t for t in tickers if t not in prices]
+    if missing and len(missing) < len(tickers):
+        try:
+            retry_df = _movers_download(missing, "7d", "1d", 15)
+            prices.update(_extract_closes(retry_df, missing))
+        except Exception:
+            pass
+
+    rows = []
+    for t, (price, prev) in prices.items():
+        rows.append({"ticker": t, "price": _round_price(price),
+                     "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0})
     rows.sort(key=lambda r: r["change_pct"], reverse=True)
     return (tuple(rows[:n]), tuple(reversed(rows[-n:])))
 

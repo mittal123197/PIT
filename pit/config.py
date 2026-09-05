@@ -28,7 +28,7 @@ def _env_int(name: str, default: int) -> int:
 # want; the lists below are ONLY a "what's moving" discovery reference (spanning
 # caps so no bias is baked in) and a default pool for the offline replay engine.
 MARKET: str = os.getenv("PIT_MARKET", "us").lower()
-CURRENCY: str = "$" if MARKET == "us" else "₹"
+CURRENCY: str = "$" if MARKET in ("us", "crypto") else "₹"
 
 _US_UNIVERSE: list[str] = [
     # mega / large cap

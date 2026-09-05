@@ -178,7 +178,7 @@ for i in $(seq 1 "$BATTLES"); do
     ARGS+=(--replay --compress "$COMPRESS" --refresh "$REFRESH")
     [[ -n "$REPLAY_DATE" ]] && ARGS+=(--date "$REPLAY_DATE")
   else
-    ARGS+=(--minutes "$MINUTES" --interval "$INTERVAL")
+    ARGS+=(--minutes "$MINUTES" --interval "$INTERVAL" --refresh "$REFRESH")
   fi
   [[ "$DEBUG" == "1" ]] && ARGS+=(--debug)
 
