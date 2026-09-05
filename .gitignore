@@ -10,6 +10,7 @@ data/*.db-shm
 data/feed_cache/
 data/run_logs/
 data/.dashboard.pid
+data/.run_arena.lock
 pit/data/
 *.sqlite
 *.sqlite3

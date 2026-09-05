@@ -18,6 +18,14 @@ from . import queries as q
 from .config import CURRENCY
 
 app = Flask(__name__)
+# Always pick up template edits without a restart — Jinja's auto-reload
+# otherwise defaults to app.debug, which is off unless PIT_WEB_DEBUG=1. A
+# long-running dashboard process (the common case: run_arena.sh starts it
+# once and leaves it up) would keep serving stale HTML from before a code
+# change until manually restarted, with no error or warning that it was
+# doing so. Harmless to leave on unconditionally: it only adds a template
+# file mtime check per render.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
 def _conn():
@@ -70,9 +78,7 @@ def live_view():
     data = q.live_view(conn)
     trades = q.trade_analysis(conn, data["round"]["id"]) if data else None
     audit = q.audit_log(conn, data["round"]["id"]) if data else None
-    pool_size = q.arena_summary(conn)["lineages"]
-    return render_template("live.html", data=data, trades=trades, audit=audit,
-                          pool_size=pool_size)
+    return render_template("live.html", data=data, trades=trades, audit=audit)
 
 
 @app.route("/round/<int:round_id>")

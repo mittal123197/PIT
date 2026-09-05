@@ -19,12 +19,6 @@
   {% if data.is_live %}<span class="mono muted" style="font-size:11px;">
     auto-refreshing every 8s</span>{% endif %}
 </div>
-{% if pool_size and pool_size > data.agents|length %}
-<p class="muted" style="font-size:12.5px;margin:0 0 20px;">
-  {{ pool_size - data.agents|length }} other lineage(s) in the pool are sitting
-  this round out — matchups round-robin, so they'll be in the next one.</p>
-{% endif %}
-
 <div class="grid2" style="margin-bottom:26px;">
   {% for a in data.agents %}
   <div class="panel" style="margin-bottom:0;

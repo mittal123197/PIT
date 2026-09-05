@@ -19,33 +19,31 @@
 <div class="hero">
   <h1>{% if summary.lineages == 2 %}Two{% elif summary.lineages == 3 %}Three
     {% else %}{{ summary.lineages }}{% endif %} AI agents.
-    <span class="accent">Same money, same clock, no draws.</span></h1>
-  <p class="lead">Each round pairs two trading agents with identical capital,
-    trading blind to each other's moves — seeing the rival's live return, never
-    their trades.
-    {% if summary.lineages > 2 %}
-      With a pool of {{ summary.lineages }}, matchups round-robin through every
-      possible pairing, so ranking reflects the whole pool, not just one rival.
-    {% endif %}
-    The winner's stake grows and it reinforces what worked; the loser's stake
-    shrinks and it self-critiques its own mistakes into a new generation.
+    <span class="accent">Same round, same clock, no draws.</span></h1>
+  <p class="lead">Every lineage in the pool trades the same round at the same
+    time — not a rotating 1v1. Each agent sees every rival's live return
+    every decision, but never their trades. The top finisher's stake grows
+    and it reinforces what worked; everyone else is a loser and
+    self-critiques its own mistakes into a new generation (dead last takes
+    the full penalty, anyone strictly in the middle takes a smaller one).
     Survive, and the rounds only get shorter.</p>
   <div class="howflow">
     <div class="howstep s1"><div class="n">01</div>
-      <div class="t">Duel</div>
-      <div class="d">{% if summary.lineages > 2 %}Two agents from the pool trade
-        the same market, same deadline{% else %}Both agents trade the same
-        market, same deadline{% endif %} — seeing the opponent's score but not
-        their trades.</div></div>
+      <div class="t">Battle</div>
+      <div class="d">All {{ summary.lineages }} lineages trade the same market,
+        same deadline, simultaneously — seeing every rival's live score but
+        never their trades.</div></div>
     <div class="howstep s2"><div class="n">02</div>
       <div class="t">Resolve</div>
-      <div class="d">Higher return wins. Ties break on fewer trades, then lower
-        drawdown. Never a draw.</div></div>
+      <div class="d">Full ranking, highest return first. Ties break on fewer
+        trades, then lower drawdown. Never a draw.</div></div>
     <div class="howstep s3"><div class="n">03</div>
       <div class="t">Evolve</div>
-      <div class="d">Winner +25% capital & ELO, reinforces what worked. Loser
-        −20%, self-critiques its own trades into a new generation (never
-        copies the winner). A win on zero trades gets a capped bonus instead.</div></div>
+      <div class="d">1st place: +25% capital & ELO, reinforces what worked.
+        Dead last: −20%, self-critiques into a new generation. Anyone
+        strictly in the middle is still a loser (self-critiques too) but
+        takes a smaller penalty. A win on zero trades gets a capped bonus
+        instead.</div></div>
     <div class="howstep s4"><div class="n">04</div>
       <div class="t">Repeat</div>
       <div class="d">The pool also votes shared DO/AVOID guidelines into a
@@ -67,7 +65,7 @@
 </div>
 
 {% if h2h and h2h.result %}
-<div class="sec"><div class="eyebrow">Latest duel — round #{{ h2h.round.round_number }}</div>
+<div class="sec"><div class="eyebrow">Latest round — round #{{ h2h.round.round_number }}</div>
   <div class="subtitle">The most recent round and how it was decided.</div></div>
 {% if h2h.rankings and h2h.rankings|length > 2 %}
 <div class="panel" style="padding:0;">
@@ -216,30 +214,27 @@
 </div>
 
 <div class="sec"><div class="eyebrow">Recent rounds</div>
-  <div class="subtitle">Every duel, newest first. Click through for the trades.</div></div>
+  <div class="subtitle">Every round, newest first. Click through for the trades.</div></div>
 <div class="panel">
   <table>
     <thead><tr>
-      <th>Round</th><th class="hide-sm">Length</th><th>Standings</th><th>Decided by</th>
+      <th>Round</th><th class="hide-sm">Length</th><th>Winner</th><th>Return</th>
     </tr></thead>
     <tbody>
     {% for r in rounds %}
       <tr class="clickable" onclick="location='/round/{{ r.id }}'">
         <td class="mono muted">#{{ r.round_number }}</td>
         <td class="mono hide-sm muted">{{ r.length_days ~ 'd' if r.length_days else 'live' }}</td>
-        <td>
-          {% if r.rankings %}
-            {% for p in r.rankings %}
-              <span style="white-space:nowrap;margin-right:14px;">
-                <span class="pill {{ 'win' if p.rank == 1 else 'lose' }}">#{{ p.rank }}</span>
-                <span class="dot" style="background:{{ p.lineage_id|lcolor }};"></span>
-                <span class="agentname">{{ p.lineage }}</span>
-                <span class="mono {{ 'up' if p.return_pct >= 0 else 'down' }}">{{ p.return_pct|pct }}</span>
-              </span>
-            {% endfor %}
-          {% else %}<span class="pill status">running</span>{% endif %}
-        </td>
-        <td>{% if r.resolution_reason %}<span class="pill reason">{{ r.resolution_reason }}</span>{% else %}—{% endif %}</td>
+        {% if r.rankings %}
+          {% set w = r.rankings[0] %}
+          <td>
+            <span class="dot" style="background:{{ w.lineage_id|lcolor }};"></span>
+            <span class="agentname">{{ w.lineage }}</span>
+          </td>
+          <td class="mono {{ 'up' if w.return_pct >= 0 else 'down' }}">{{ w.return_pct|pct }}</td>
+        {% else %}
+          <td colspan="2"><span class="pill status">running</span></td>
+        {% endif %}
       </tr>
     {% else %}
       <tr><td colspan="4" class="muted" style="padding:22px;">No rounds yet.</td></tr>
