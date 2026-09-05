@@ -29,25 +29,35 @@ def _today() -> str:
     return datetime.now().date().isoformat()
 
 
-# ---- seeding two autonomous agents ------------------------------------
+def local_ts() -> str:
+    """Local wall-clock date+time for anything persisted to the trade ledger,
+    messages, or audit log — date included, not just time, so a trade in the
+    ledger is unambiguous on its own instead of relying on "well it must have
+    been today." Every writer of a persisted timestamp in this codebase uses
+    this (or forward._now()'s UTC ISO, deliberately, for a handful of
+    non-trade metadata rows) — see the module docstring notes on past bugs
+    from mixing UTC and local timestamps on the same page."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# Each agent gets a DIFFERENT brain on a DIFFERENT provider — not just a
-# different model name, real infra diversity. OpenRouter's free ":free"
-# models share one rate-limited pool across ALL of OpenRouter's free users
-# (20/min, 50/day) — repeatedly exhausted this session — so RONIN and VIPER
-# now run on DeepSeek's own paid API instead: cheap, not shared with anyone
-# else's traffic. "deepseek:<model>" / "openrouter:<model>" prefixes route in
-# llm.llm_chat; no prefix routes straight to Groq. Override any of these via
-# env if you like.
+
+# ---- seeding autonomous agents -----------------------------------------
+
+# All three lineages default to DeepSeek now (explicit call: consolidate
+# onto one cheap, non-shared, metered provider rather than juggling Groq's
+# free-tier limits and OpenRouter's shared :free pool). Trade-off worth
+# knowing: this gives up the earlier "different providers so one outage
+# doesn't take out the whole pool" property (see llm.groq_recently_rate_limited
+# and its docstring) — a DeepSeek outage now affects all three at once.
+# "deepseek:<model>" / "openrouter:<model>" prefixes route in llm.llm_chat;
+# no prefix routes straight to Groq. Override any of these via env if you
+# want a mixed pool again (e.g. PIT_LYNX_MODEL=openai/gpt-oss-20b for Groq).
 _RONIN_MODEL = os.getenv("PIT_RONIN_MODEL", "deepseek:deepseek-v4-flash")
-# Both default to the cheap model (flash, not pro — pro runs ~3x the cost)
-# while spend is being kept deliberately small. Set PIT_VIPER_MODEL=
-# deepseek:deepseek-v4-pro yourself once you're comfortable with the cost —
-# that's the "different reasoning depth" experiment, just opt-in for now.
+# All default to the cheap model (flash, not pro — pro runs ~3x the cost)
+# while spend is being kept deliberately small. Bump any one of these to
+# deepseek:deepseek-v4-pro yourself once you want the "does extra reasoning
+# depth help" experiment — that's opt-in, not a default.
 _VIPER_MODEL = os.getenv("PIT_VIPER_MODEL", "deepseek:deepseek-v4-flash")
-# Plain Groq — no prefix routes straight to Groq (see llm.llm_chat) — a
-# second, independent provider alongside DeepSeek.
-_LYNX_MODEL = os.getenv("PIT_LYNX_MODEL", "openai/gpt-oss-20b")
+_LYNX_MODEL = os.getenv("PIT_LYNX_MODEL", "deepseek:deepseek-v4-flash")
 
 AUTONOMOUS_SEED = [
     ("RONIN", {"mode": "autonomous", "notes": "", "model": _RONIN_MODEL}),
@@ -435,7 +445,7 @@ def _resolve(conn, rnd, config, price) -> dict:
         # (see _persist_audit in live.py), so a round-end close-out stamped
         # in UTC showed up hours earlier than the ticks that preceded it in
         # the same trade ledger (e.g. "08:50" right after fills at "14:15").
-        close_out_ts = datetime.now().strftime("%H:%M:%S")
+        close_out_ts = local_ts()
         close_out_all_positions(conn, rnd["id"], aid, st, price, close_out_ts)
         h = json.loads(st["holdings"])
         total = st["current_capital"] + sum(q * (price(t) or 0) for t, q in h.items())
@@ -623,7 +633,7 @@ def _share_lesson(conn, round_id, agent_id, note) -> None:
     conn.execute(
         "INSERT INTO agent_messages (round_id, agent_id, ts, kind, message) "
         "VALUES (?,?,?,'lesson',?)",
-        (round_id, agent_id, datetime.now().strftime("%H:%M:%S"),
+        (round_id, agent_id, local_ts(),
          f"\U0001f4dd Lesson from this round: {note}"))
 
 

@@ -275,25 +275,42 @@ def cmd_history(args):
         round_id = row["id"]
     where = "WHERE r.id=?" if round_id else ""
     params = (round_id,) if round_id else ()
-    results = conn.execute(
-        f"""SELECT r.round_number, rr.resolution_reason, rr.winner_return_pct,
-                   rr.loser_return_pct, wl.name win, ll.name lose
-            FROM round_results rr
-            JOIN rounds r ON r.id = rr.round_id
-            JOIN agents wa ON wa.id = rr.winner_agent_id
-            JOIN agents la ON la.id = rr.loser_agent_id
-            JOIN lineages wl ON wl.id = wa.lineage_id
-            JOIN lineages ll ON ll.id = la.lineage_id
+    # Full placement (1st/2nd/3rd + return%), not winner-vs-loser — round_results
+    # only ever records the top and bottom finisher, silently dropping anyone
+    # in the middle once a round has 3+ participants (which every round does
+    # now: the whole pool trades together, not a rotating 1v1).
+    rounds = conn.execute(
+        f"""SELECT r.id, r.round_number, rr.resolution_reason
+            FROM rounds r LEFT JOIN round_results rr ON rr.round_id = r.id
             {where}
             ORDER BY r.round_number""",
         params,
     ).fetchall()
+    round_ids = [r["id"] for r in rounds]
+    rankings_by_round: dict[int, list] = {}
+    if round_ids:
+        placeholders = ",".join("?" * len(round_ids))
+        for row in conn.execute(
+            f"""SELECT rr.round_id, rr.rank, rr.return_pct, l.name
+                FROM round_rankings rr
+                JOIN agents a ON a.id = rr.agent_id
+                JOIN lineages l ON l.id = a.lineage_id
+                WHERE rr.round_id IN ({placeholders})
+                ORDER BY rr.round_id, rr.rank""",
+            round_ids,
+        ).fetchall():
+            rankings_by_round.setdefault(row["round_id"], []).append(row)
     print("\nRound results")
     print("-" * 68)
-    for row in results:
-        print(f"  R{row['round_number']:>2}  {row['win']:<14} beat {row['lose']:<14} "
-              f"[{row['resolution_reason']}]  {row['winner_return_pct']:+.2f}% vs "
-              f"{row['loser_return_pct']:+.2f}%")
+    for row in rounds:
+        places = rankings_by_round.get(row["id"]) or []
+        if not places:
+            print(f"  R{row['round_number']:>2}  (unresolved)")
+            continue
+        placed = "  ".join(f"{p['rank']}. {p['name']} {p['return_pct']:+.2f}%"
+                           for p in places)
+        reason = f" [{row['resolution_reason']}]" if row["resolution_reason"] else ""
+        print(f"  R{row['round_number']:>2}  {placed}{reason}")
     if round_id:
         trades = conn.execute(
             """SELECT t.ts, l.name, t.symbol, t.side, t.qty, t.price, t.reason
@@ -306,7 +323,7 @@ def cmd_history(args):
         print("-" * 68)
         for t in trades:
             ts = t["ts"][11:19] if t["ts"] and "T" in t["ts"] else (t["ts"] or "")
-            print(f"  {ts:<8} {t['name']:<14} {t['side']:<4} {t['qty']:>6.0f} {t['symbol']:<12} "
+            print(f"  {ts:<19} {t['name']:<14} {t['side']:<4} {t['qty']:>6.0f} {t['symbol']:<12} "
                   f"@ {t['price']:>8.2f}  {t['reason'] or ''}")
 
 

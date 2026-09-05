@@ -56,20 +56,37 @@ def rating_timeline(conn: sqlite3.Connection, lineage_id: int) -> list[float]:
 
 
 def recent_rounds(conn: sqlite3.Connection, limit: int = 25) -> list[dict]:
-    return _rows(conn.execute(
+    """Full 1st/2nd/3rd placement per round, not just winner-vs-loser —
+    `round_results` only ever records the top and bottom finisher, which
+    silently drops anyone in the middle once a round has 3+ participants
+    (every round, now that the whole pool trades together)."""
+    rounds = _rows(conn.execute(
         """SELECT r.id, r.round_number, r.length_days, r.goal_pct, r.status,
-                  rr.resolution_reason, rr.winner_return_pct, rr.loser_return_pct,
-                  rr.rating_delta,
-                  wl.name AS winner, ll.name AS loser
+                  rr.resolution_reason
            FROM rounds r
            LEFT JOIN round_results rr ON rr.round_id = r.id
-           LEFT JOIN agents wa ON wa.id = rr.winner_agent_id
-           LEFT JOIN agents la ON la.id = rr.loser_agent_id
-           LEFT JOIN lineages wl ON wl.id = wa.lineage_id
-           LEFT JOIN lineages ll ON ll.id = la.lineage_id
            ORDER BY r.round_number DESC LIMIT ?""",
         (limit,),
     ))
+    if not rounds:
+        return rounds
+    ids = tuple(r["id"] for r in rounds)
+    placeholders = ",".join("?" * len(ids))
+    by_round: dict[int, list] = {}
+    for row in _rows(conn.execute(
+        f"""SELECT rr.round_id, rr.rank, rr.return_pct, l.name AS lineage,
+                   l.id AS lineage_id
+            FROM round_rankings rr
+            JOIN agents a ON a.id = rr.agent_id
+            JOIN lineages l ON l.id = a.lineage_id
+            WHERE rr.round_id IN ({placeholders})
+            ORDER BY rr.round_id, rr.rank""",
+        ids,
+    )):
+        by_round.setdefault(row["round_id"], []).append(row)
+    for r in rounds:
+        r["rankings"] = by_round.get(r["id"], [])
+    return rounds
 
 
 def round_detail(conn: sqlite3.Connection, round_id: int) -> dict | None:

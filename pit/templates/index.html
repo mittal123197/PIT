@@ -220,8 +220,7 @@
 <div class="panel">
   <table>
     <thead><tr>
-      <th>Round</th><th class="hide-sm">Length</th><th>Winner</th>
-      <th class="hide-sm">Returns</th><th>Decided by</th><th>ELO Δ</th>
+      <th>Round</th><th class="hide-sm">Length</th><th>Standings</th><th>Decided by</th>
     </tr></thead>
     <tbody>
     {% for r in rounds %}
@@ -229,22 +228,21 @@
         <td class="mono muted">#{{ r.round_number }}</td>
         <td class="mono hide-sm muted">{{ r.length_days ~ 'd' if r.length_days else 'live' }}</td>
         <td>
-          {% if r.winner %}<span class="agentname up">{{ r.winner }}</span>
-            <span class="muted" style="font-size:12px;"> beat {{ r.loser }}</span>
+          {% if r.rankings %}
+            {% for p in r.rankings %}
+              <span style="white-space:nowrap;margin-right:14px;">
+                <span class="pill {{ 'win' if p.rank == 1 else 'lose' }}">#{{ p.rank }}</span>
+                <span class="dot" style="background:{{ p.lineage_id|lcolor }};"></span>
+                <span class="agentname">{{ p.lineage }}</span>
+                <span class="mono {{ 'up' if p.return_pct >= 0 else 'down' }}">{{ p.return_pct|pct }}</span>
+              </span>
+            {% endfor %}
           {% else %}<span class="pill status">running</span>{% endif %}
         </td>
-        <td class="mono hide-sm">
-          {% if r.winner_return_pct is not none %}
-            <span class="up">{{ r.winner_return_pct|pct }}</span>
-            <span class="muted"> / </span>
-            <span class="down">{{ r.loser_return_pct|pct }}</span>
-          {% else %}—{% endif %}
-        </td>
         <td>{% if r.resolution_reason %}<span class="pill reason">{{ r.resolution_reason }}</span>{% else %}—{% endif %}</td>
-        <td class="mono up">{% if r.rating_delta is not none %}+{{ '%.1f'|format(r.rating_delta) }}{% else %}—{% endif %}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="muted" style="padding:22px;">No rounds yet.</td></tr>
+      <tr><td colspan="4" class="muted" style="padding:22px;">No rounds yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>

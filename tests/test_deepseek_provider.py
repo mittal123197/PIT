@@ -57,11 +57,14 @@ def test_deepseek_chat_surfaces_an_error_payload(monkeypatch):
     assert "Insufficient balance" in str(exc_info.value)
 
 
-def test_ronin_and_viper_default_to_deepseek_lynx_stays_on_groq():
+def test_all_three_lineages_default_to_deepseek():
+    # Explicit consolidation: all three lineages trade on DeepSeek by
+    # default now (was: RONIN/VIPER on DeepSeek, LYNX on plain Groq for
+    # provider diversity). Override PIT_LYNX_MODEL to get a second provider
+    # back if you want that trade-off restored.
     assert forward._RONIN_MODEL.startswith("deepseek:")
     assert forward._VIPER_MODEL.startswith("deepseek:")
-    assert not forward._LYNX_MODEL.startswith("deepseek:")
-    assert not forward._LYNX_MODEL.startswith("openrouter:")
+    assert forward._LYNX_MODEL.startswith("deepseek:")
 
 
 if __name__ == "__main__":

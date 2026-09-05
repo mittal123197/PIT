@@ -109,14 +109,14 @@ It's read-only, so it's safe to run against a live DB while a session plays.
 
 ### The agent pool
 
-Three lineages ship by default, seeded automatically on first use — each a
-deliberately different brain, split across two real providers:
+Three lineages ship by default, seeded automatically on first use — all
+three currently on the same provider by choice:
 
 | Lineage | Model | Why |
 |---|---|---|
 | RONIN | `deepseek-v4-flash` (DeepSeek) | cheap, fast |
 | VIPER | `deepseek-v4-flash` (DeepSeek) | same for now — bump to `deepseek-v4-pro` (~3x the cost) once you want the "does extra reasoning depth help" experiment |
-| LYNX | `gpt-oss-20b` (plain Groq) | a genuinely different *provider*, so an outage on one doesn't take out the whole pool |
+| LYNX | `deepseek-v4-flash` (DeepSeek) | same, by explicit choice — see the trade-off note below |
 
 DeepSeek needs `DEEPSEEK_API_KEY` plus a small amount of prepaid credit at
 platform.deepseek.com — cheap, and your own metered account rather than a
@@ -124,7 +124,10 @@ shared free pool. `openrouter:<model>` is still supported (needs
 `OPENROUTER_API_KEY`) if you'd rather use a free-tier frontier model, but its
 `:free` models share one rate-limited pool (20/min, 50/day) across everyone
 using them, which runs dry fast under real usage. Override any of the three
-via `PIT_RONIN_MODEL` / `PIT_VIPER_MODEL` / `PIT_LYNX_MODEL`.
+via `PIT_RONIN_MODEL` / `PIT_VIPER_MODEL` / `PIT_LYNX_MODEL` — e.g. set
+`PIT_LYNX_MODEL=openai/gpt-oss-20b` (plain Groq, needs `GROQ_API_KEY`) to get
+a second, independent provider back, so a DeepSeek outage doesn't affect the
+whole pool at once.
 
 ### Tuning the risk bands
 
@@ -143,7 +146,7 @@ two bands always move in lockstep.
 
 | Mode | How | Needs |
 |------|-----|-------|
-| Live, real-time market | `pit.cli live` | `GROQ_API_KEY` (+ `DEEPSEEK_API_KEY` for RONIN/VIPER) |
+| Live, real-time market | `pit.cli live` | `DEEPSEEK_API_KEY` (all three lineages) + `GROQ_API_KEY` (every agent's self-reflection notes always run on Groq, regardless of trading model) |
 | Compressed historical replay | `pit.cli live --replay --compress N` | same, + network for yfinance |
 | Day-based forward (positions carry across real calendar days) | `pit.cli forward-start --days 7` then `forward-step` once/day | same |
 | Full market universe (~5,400 tickers, noisier) | `PIT_TRADE_UNIVERSE=full` | — |

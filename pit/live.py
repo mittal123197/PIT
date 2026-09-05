@@ -22,11 +22,12 @@ def _persist_audit(conn, round_id, agent_id, trace: list[dict]) -> None:
     """Write every turn of a decision (thoughts, tools used, results, final
     action) to `agent_audit`, for the debug-mode audit log on /live.
 
-    Uses local wall-clock time (matching trades/fills, which use
-    datetime.now() via _tick's `ts`) — not forward._now()'s UTC ISO. Mixing
-    the two used to show audit/message timestamps hours off from the fills
-    they belonged to (a full UTC-offset gap, e.g. IST is +5:30)."""
-    ts = datetime.now().strftime("%H:%M:%S")
+    Uses local wall-clock date+time (matching trades/fills, which use
+    forward.local_ts() via _tick_body's `ts`) — not forward._now()'s UTC
+    ISO. Mixing the two used to show audit/message timestamps hours off
+    from the fills they belonged to (a full UTC-offset gap, e.g. IST is
+    +5:30)."""
+    ts = forward.local_ts()
     for step in trace:
         conn.execute(
             """INSERT INTO agent_audit
@@ -191,8 +192,7 @@ def _refresh_marks(conn, config, rnd, verbose):
         st = dict(r)
         if st["status"] == "active":
             forward.check_position_stops(conn, rnd["id"], st["agent_id"], st,
-                                         price, datetime.now().strftime("%H:%M:%S"),
-                                         config)
+                                         price, forward.local_ts(), config)
         h = json.loads(st["holdings"])
         total = st["current_capital"] + sum(q * (price(t) or 0) for t, q in h.items())
         ret = (total / st["starting_capital"] - 1) * 100
@@ -202,7 +202,7 @@ def _refresh_marks(conn, config, rnd, verbose):
             hit_reason = "stop-loss" if ret <= -stop else "goal-hit" if ret >= goal else None
             if hit_reason:
                 forward._liquidate(conn, rnd["id"], st["agent_id"], st, price,
-                                   datetime.now().strftime("%H:%M:%S"), reason=hit_reason)
+                                   forward.local_ts(), reason=hit_reason)
                 total = st["current_capital"]
                 ret = (total / st["starting_capital"] - 1) * 100
         conn.execute("UPDATE round_states SET final_return_pct=? "
@@ -239,7 +239,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     holdings_snapshot = {aid: set(json.loads(st["holdings"]).keys())
                         for aid, st in states.items()}
     guidelines = gmod.active_texts(conn)
-    ts = datetime.now().strftime("%H:%M:%S")
+    ts = forward.local_ts()
 
     def value(st):
         h = json.loads(st["holdings"])
