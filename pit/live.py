@@ -321,6 +321,8 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             for o in orders:
                 print(f"         {o['side']:<4} {o['ticker']:<6} — {o.get('reason','')[:52]}",
                       flush=True)
+            for rej in st.get("rejected_orders", []):
+                print(f"         ✗ not executed — {rej}", flush=True)
             if message:
                 print(f"         💬 \"{message}\"", flush=True)
             if debug:

@@ -11,6 +11,7 @@ Paper only: fills are at the real last close, no real orders anywhere.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -263,19 +264,33 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
             "date": date, "logs": logs}
 
 
+def _floor_qty(x: float) -> float:
+    """Floor to 4 decimals (fractional shares) — never rounds UP, so a buy
+    can't exceed the cash/budget it was sized from."""
+    return math.floor(x * 10_000 + 1e-9) / 10_000
+
+
 def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
     n = 0
+    rejected = []   # surfaced to the live console/page; used to be silent
     holdings = json.loads(st["holdings"])
     cost_basis = json.loads(st.get("cost_basis") or "{}")
     cash = st["current_capital"]
     for o in orders:
         px = price(o["ticker"])
         if not px or px <= 0:
+            rejected.append(f"{o['side']} {o['ticker']}: no price available")
             continue
         if o["side"] == "buy":
             budget = o.get("amount_inr") or (o.get("qty", 0) * px)
-            qty = float(int(min(budget, cash) // px))
-            if qty <= 0:
+            # Fractional shares: at a $1,000-scale stake, whole-share sizing
+            # silently dropped every order for a stock priced above the
+            # agent's budget (e.g. LITE at $1,114 vs a $560 budget -> 0
+            # shares -> order discarded, agent retries it every tick).
+            qty = _floor_qty(min(budget, cash) / px)
+            if qty <= 0 or qty * px < 0.01:
+                rejected.append(f"buy {o['ticker']}: ${min(budget, cash):,.2f} "
+                                f"available, nothing to buy at ${px:,.2f}")
                 continue
             cash -= qty * px
             prev_qty = holdings.get(o["ticker"], 0.0)
@@ -287,10 +302,11 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
             holdings[o["ticker"]] = prev_qty + qty
         else:  # sell
             held = holdings.get(o["ticker"], 0.0)
-            qty = float(int(o.get("qty", held) if "qty" in o
-                            else (o.get("amount_inr", held * px) / px)))
+            qty = _floor_qty(o.get("qty", held) if "qty" in o
+                             else (o.get("amount_inr", held * px) / px))
             qty = min(qty, held)
             if qty <= 0:
+                rejected.append(f"sell {o['ticker']}: nothing held to sell")
                 continue
             cash += qty * px
             rem = held - qty
@@ -309,6 +325,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
     st["current_capital"] = cash
     st["holdings"] = json.dumps(holdings)
     st["cost_basis"] = json.dumps(cost_basis)
+    st["rejected_orders"] = rejected
     conn.execute("UPDATE round_states SET trade_count=trade_count+?, cost_basis=? "
                  "WHERE round_id=? AND agent_id=?",
                  (n, json.dumps(cost_basis), round_id, agent_id))

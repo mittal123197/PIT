@@ -113,8 +113,9 @@ Respond ONLY with JSON of this shape:
 Set done=false and fill "research" to gather data first (you'll be called again \
 with the results). Set done=true with your "orders" (and a "message") to act. \
 Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what you hold. \
-Amounts are in your account currency. You may also give "qty" (whole shares) \
-instead of amount_inr."""
+Amounts are in your account currency. You may also give "qty" (shares, fractional OK) \
+instead of amount_inr. Fractional shares are allowed, so you can buy a stock \
+priced above your cash by sizing the amount to what you can afford."""
 
 
 def decide(view: dict, day: int, total_days: int, goal_pct: float,
