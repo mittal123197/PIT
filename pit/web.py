@@ -48,6 +48,36 @@ def _money(value) -> str:
     return f"{CURRENCY}{value:,.0f}"
 
 
+@app.template_filter("money2")
+def _money2(value) -> str:
+    """Dollar amount with cents — the whole-dollar `money` filter shows a
+    $0.01 cash balance as "$0" and a $307.51 fill as "$308"."""
+    if value is None:
+        return "—"
+    return f"{CURRENCY}{value:,.2f}"
+
+
+@app.template_filter("price")
+def _price(value) -> str:
+    """A per-unit asset price: 2 decimals normally, more for sub-dollar
+    assets (SHIB-USD is ~$0.0000054, which `money` showed as "$0")."""
+    if value is None:
+        return "—"
+    v = abs(value)
+    if v >= 1:
+        return f"{CURRENCY}{value:,.2f}"
+    return f"{CURRENCY}{value:.8f}".rstrip("0").rstrip(".") if v else f"{CURRENCY}0"
+
+
+@app.template_filter("qty")
+def _qty(value) -> str:
+    """Share/unit count — up to 4 decimals, trailing zeros trimmed (orders
+    can be fractional now; '%.0f' showed 1.6486 shares as "2")."""
+    if value is None:
+        return "—"
+    return f"{value:,.4f}".rstrip("0").rstrip(".")
+
+
 @app.template_filter("spark")
 def _spark(values) -> Markup:
     return Markup(q.sparkline(values or []))

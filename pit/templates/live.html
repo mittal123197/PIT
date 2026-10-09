@@ -33,13 +33,13 @@
       <div style="font-family:'Space Grotesk';font-weight:700;font-size:30px;"
         class="{{ 'up' if a.ret >= 0 else 'down' }}">{{ a.ret|pct }}</div>
       <div class="mono muted" style="font-size:13px;margin-top:2px;">
-        {{ a.value|money }} <span class="muted">·</span> cash {{ a.current_capital|money }}
+        {{ a.value|money2 }} <span class="muted">·</span> cash {{ a.current_capital|money2 }}
         <span class="muted">·</span> {{ a.trade_count }} trades</div>
       <div style="margin-top:14px;">
         {% if a.holdings %}
           {% for sym, qty in a.holdings.items() %}
             <span class="pill status" style="margin:2px 4px 2px 0;display:inline-block;">
-              {{ sym }} ×{{ '%.0f'|format(qty) }}</span>
+              {{ sym }} ×{{ qty|qty }}</span>
           {% endfor %}
         {% else %}
           <span class="muted" style="font-size:12.5px;">all cash — no open positions</span>
@@ -61,8 +61,8 @@
       <tr>
         <td class="agentname">{{ p.name }}</td>
         <td class="mono">{{ p.symbol }}</td>
-        <td class="mono">{{ '%.0f'|format(p.qty) }}</td>
-        <td class="mono">{{ p.avg_price|money }}</td>
+        <td class="mono">{{ p.qty|qty }}</td>
+        <td class="mono">{{ p.avg_price|price }}</td>
         <td class="mono">{{ p.held }}</td>
         <td style="font-size:12.5px;color:var(--ink-soft);max-width:340px;">{{ p.reason or '—' }}</td>
       </tr>
@@ -83,11 +83,11 @@
     {% for r in trades.round_trips %}
       <tr>
         <td class="agentname">{{ r.name }}</td>
-        <td class="mono">{{ r.symbol }} <span class="muted">×{{ '%.0f'|format(r.qty) }}</span></td>
-        <td class="mono">{{ r.buy_price|money }} → {{ r.sell_price|money }}</td>
+        <td class="mono">{{ r.symbol }} <span class="muted">×{{ r.qty|qty }}</span></td>
+        <td class="mono">{{ r.buy_price|price }} → {{ r.sell_price|price }}</td>
         <td class="mono">{{ r.hold }}</td>
         <td class="mono {{ 'up' if r.pnl_pct >= 0 else 'down' }}">{{ r.pnl_pct|pct }}
-          <span class="muted">({{ r.pnl_amount|money }})</span></td>
+          <span class="muted">({{ r.pnl_amount|money2 }})</span></td>
         <td style="font-size:12px;color:var(--ink-soft);max-width:320px;">
           <div>▸ {{ r.buy_reason or '—' }}</div>
           <div style="margin-top:3px;">◂ {{ r.sell_reason or '—' }}</div>
@@ -113,9 +113,9 @@
         <td class="mono muted">{{ f.ts[11:19] if 'T' in f.ts else f.ts }}</td>
         <td class="agentname">{{ f.name }}</td>
         <td><span class="pill {{ 'win' if f.side == 'buy' else 'lose' }}">{{ f.side }}</span></td>
-        <td class="mono">{{ '%.0f'|format(f.qty) }}</td>
+        <td class="mono">{{ f.qty|qty }}</td>
         <td class="mono">{{ f.symbol }}</td>
-        <td class="mono">{{ f.price|money }}</td>
+        <td class="mono">{{ f.price|price }}</td>
         <td class="muted hide-sm" style="font-size:12px;">{{ f.reason or '' }}</td>
       </tr>
     {% else %}

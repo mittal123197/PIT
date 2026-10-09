@@ -31,10 +31,10 @@
           <tr><td class="muted" style="padding:6px 0;border:none;">Max drawdown</td>
               <td class="mono down" style="padding:6px 0;border:none;text-align:right;">{{ '%.2f'|format(s.max_drawdown_pct) }}%</td></tr>
           <tr><td class="muted" style="padding:6px 0;border:none;">Capital given</td>
-              <td class="mono" style="padding:6px 0;border:none;text-align:right;">{{ s.starting_capital|money }}</td></tr>
+              <td class="mono" style="padding:6px 0;border:none;text-align:right;">{{ s.starting_capital|money2 }}</td></tr>
           <tr><td class="muted" style="padding:6px 0;border:none;">Ending value</td>
               <td class="mono {{ 'up' if s.final_return_pct is not none and s.final_return_pct >= 0 else 'down' }}"
-                  style="padding:6px 0;border:none;text-align:right;">{{ (s.starting_capital*(1+(s.final_return_pct or 0)/100))|money }}</td></tr>
+                  style="padding:6px 0;border:none;text-align:right;">{{ (s.starting_capital*(1+(s.final_return_pct or 0)/100))|money2 }}</td></tr>
           <tr><td class="muted" style="padding:6px 0;border:none;">Status</td>
               <td style="padding:6px 0;border:none;text-align:right;">
                 <span class="pill status">{{ s.status }}</span></td></tr>
@@ -107,11 +107,11 @@
     {% for r in trade_stats.round_trips %}
       <tr>
         <td class="agentname">{{ r.name }}</td>
-        <td class="mono">{{ r.symbol }} <span class="muted">×{{ '%.0f'|format(r.qty) }}</span></td>
-        <td class="mono">{{ r.buy_price|money }} → {{ r.sell_price|money }}</td>
+        <td class="mono">{{ r.symbol }} <span class="muted">×{{ r.qty|qty }}</span></td>
+        <td class="mono">{{ r.buy_price|price }} → {{ r.sell_price|price }}</td>
         <td class="mono">{{ r.hold }}</td>
         <td class="mono {{ 'up' if r.pnl_pct >= 0 else 'down' }}">{{ r.pnl_pct|pct }}
-          <span class="muted">({{ r.pnl_amount|money }})</span></td>
+          <span class="muted">({{ r.pnl_amount|money2 }})</span></td>
         <td style="font-size:12px;color:var(--ink-soft);max-width:320px;">
           <div>▸ {{ r.buy_reason or '—' }}</div>
           <div style="margin-top:3px;">◂ {{ r.sell_reason or '—' }}</div>
@@ -136,8 +136,8 @@
       <tr>
         <td class="agentname">{{ p.name }}</td>
         <td class="mono">{{ p.symbol }}</td>
-        <td class="mono">{{ '%.0f'|format(p.qty) }}</td>
-        <td class="mono">{{ p.avg_price|money }}</td>
+        <td class="mono">{{ p.qty|qty }}</td>
+        <td class="mono">{{ p.avg_price|price }}</td>
         <td class="mono">{{ p.held }}</td>
         <td style="font-size:12.5px;color:var(--ink-soft);max-width:340px;">{{ p.reason or '—' }}</td>
       </tr>
@@ -160,10 +160,10 @@
         <td class="mono muted">{{ t.ts[11:19] if 'T' in t.ts else t.ts }}</td>
         <td class="agentname">{{ t.lineage }}</td>
         <td><span class="pill {{ 'win' if t.side == 'buy' else 'lose' }}">{{ t.side }}</span></td>
-        <td class="mono">{{ '%.0f'|format(t.qty) }}</td>
+        <td class="mono">{{ t.qty|qty }}</td>
         <td class="mono">{{ t.symbol }}</td>
-        <td class="mono">{{ t.price|money }}</td>
-        <td class="mono hide-sm">{{ t.capital_after|money }}</td>
+        <td class="mono">{{ t.price|price }}</td>
+        <td class="mono hide-sm">{{ t.capital_after|money2 }}</td>
         <td class="muted hide-sm" style="font-size:12px;">{{ t.reason or '' }}</td>
       </tr>
     {% else %}

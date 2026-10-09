@@ -298,6 +298,12 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
                   f"already held by a rival", flush=True)
         if debug:
             _persist_audit(conn, rnd["id"], aid, trace)
+        # Stamp fills/messages when this agent's decision actually lands —
+        # `ts` above is the tick START, and a local model can spend a minute
+        # or more thinking per agent, so tick-start stamps made fills look
+        # earlier than the audit entries that produced them (and overstated
+        # every position's "held" time).
+        ts = forward.local_ts()
         n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts)
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
