@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from . import autonomous, forward, market, replay
@@ -44,6 +45,13 @@ def _persist_audit(conn, round_id, agent_id, trace: list[dict]) -> None:
              step.get("message"),
              json.dumps(step.get("raw_response")) if step.get("raw_response") is not None else None))
     conn.commit()
+
+
+# Orders each agent had rejected on its previous tick (agent_id -> reasons),
+# fed back into its next decision. Without this an agent with $0 cash kept
+# re-submitting the same unaffordable buy every tick, never learning why
+# nothing happened.
+_LAST_REJECTIONS: dict[int, list[str]] = {}
 
 
 def _price_fn():
@@ -102,8 +110,13 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         try:
             if now >= decision_due:
                 decision += 1
+                tick_started = time.time()
                 _tick(conn, config, rnd, decision, verbose, debug)
-                decision_due = time.time() + interval
+                # from tick START: a tick that takes longer than `interval`
+                # (slow local model) runs the next one straight away, instead
+                # of idling another full `interval` after it finishes — that
+                # made a "1 minute" cadence really ~4 minutes.
+                decision_due = tick_started + interval
             else:
                 _refresh_marks(conn, config, rnd, verbose)
         except Exception as exc:
@@ -250,6 +263,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     if verbose:
         print(f"[tick {tick} · {ts}]", flush=True)
 
+    jobs: list[dict] = []
     for aid, st in states.items():
         if st["status"] != "active":
             continue
@@ -289,9 +303,31 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             "notes": cfg.get("notes", ""),
             "rival_held_tickers": forward._held_by_rivals(holdings_snapshot, aid),
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid),
+            "orders_not_executed_last_tick": _LAST_REJECTIONS.get(aid, []),
         }
-        orders, notes, message, trace = autonomous.decide(
-            view, tick, 0, rnd["goal_pct"], guidelines, model=cfg.get("model"))
+        jobs.append({"aid": aid, "st": st, "name": name, "cfg": cfg, "view": view})
+
+    # Every agent decides from the SAME pre-tick snapshot (same messages,
+    # same prices, same rival holdings). Previously agents decided one after
+    # another and each one's trash talk was committed before the next agent
+    # read messages, so whoever went last saw more than whoever went first
+    # — contradicting "everyone trades the same round at the same time".
+    # Threads overlap the LLM waits where the backend allows it (a hosted
+    # API, or Ollama with OLLAMA_NUM_PARALLEL>1); a single-slot local server
+    # just queues them, which costs nothing.
+    def _decide(job):
+        return autonomous.decide(job["view"], tick, 0, rnd["goal_pct"], guidelines,
+                                 model=job["cfg"].get("model"))
+    if jobs:
+        workers = len(jobs) if os.getenv("PIT_PARALLEL_AGENTS", "1") != "0" else 1
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            decisions = list(ex.map(_decide, jobs))
+    else:
+        decisions = []
+
+    for job, (orders, notes, message, trace) in zip(jobs, decisions):
+        aid, st, name, cfg, view = (job["aid"], job["st"], job["name"],
+                                    job["cfg"], job["view"])
         orders, blocked = forward._drop_blocked_buys(orders, set(view["rival_held_tickers"]))
         if blocked and verbose:
             print(f"  {name}: blocked buy on {', '.join(blocked)} — "
@@ -305,6 +341,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
         # every position's "held" time).
         ts = forward.local_ts()
         n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts)
+        _LAST_REJECTIONS[aid] = list(st.get("rejected_orders", []))
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                      (json.dumps(cfg), aid))

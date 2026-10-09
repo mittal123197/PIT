@@ -94,6 +94,12 @@ your own idea instead of following into a name someone else already holds. \
 Sells are never restricted. This list is a snapshot from the start of this \
 decision cycle, so it won't include a rival's trade from this same moment.
 
+`orders_not_executed_last_tick` lists any of your orders that were rejected \
+last decision and why (e.g. no cash left). If `your_cash` is near zero you \
+CANNOT buy — sell something first to free cash, and don't resubmit the same \
+unaffordable order. Keep some cash back: putting your whole account into one \
+position leaves you unable to act on anything else all round.
+
 `shared_guidelines` in your context is the pool's constitution — rules every \
 lineage in the pool voted on, drawn from real self-reflection after past \
 rounds, not from us. Each is labeled "DO: ..." (a good practice worth \
@@ -155,6 +161,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "rival_return_pct": view.get("opponent_return_pct"),
         "rival_recent_messages": view.get("rival_messages", []),
         "rival_held_tickers": view.get("rival_held_tickers", []),
+        "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
     }

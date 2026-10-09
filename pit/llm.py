@@ -156,7 +156,7 @@ def _ollama_chat(model: str, messages: list, temperature: float,
         f"{host.rstrip('/')}/v1/chat/completions",
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=180) as r:
+    with urllib.request.urlopen(req, timeout=600) as r:   # queued behind other agents on a single-slot server
         data = json.loads(r.read().decode())
     if "error" in data:
         err = data["error"]
