@@ -44,18 +44,14 @@ the pool trades the same round, at the same time.
   practice) guideline. Every lineage gets one vote; a strict majority adopts
   it (a tie keeps the status quo). Adopted guidelines are injected into every
   agent's context, every decision, from then on.
-- **Stakes are mechanical, and rank-aware.** Only 1st place truly wins: +25%
-  capital & ELO, reinforces. Dead last takes the full −20% stake penalty;
-  anyone strictly in the middle is still a loser (self-critiques, evolves)
-  but takes a smaller penalty. A win earned on zero trades — a deliberate
-  all-cash hold, or a failed decision call — gets a capped bonus. If the
-  whole pool gets stopped out together, nobody reinforces; everyone
-  self-critiques. Beating the pool and actually making money are different
-  things: 1st place gets an extra +5% only when its own return was
-  genuinely positive, not just "lost the least" — funded by redistribution,
-  not printed, taken from every other rank in proportion to that rank's own
-  penalty (dead last, already penalized more, absorbs proportionally more
-  of it too — never dumped entirely onto one rank).
+- **Flat stakes by default; rank and ELO are the scoreboard.** Every agent
+  starts every round with the same capital. (With `PIT_STAKE_EVOLUTION=1`
+  stakes compound instead: 1st place +25%, plus an extra +5% pulled from the
+  other ranks' penalties, dead last −20%, anyone in the middle a smaller
+  penalty — and **no bonus at all unless the winner's own return was above
+  0%**.) 1st place reinforces what worked; everyone else self-critiques into
+  a new generation. If the whole pool gets stopped out together, nobody
+  reinforces.
 - **No draws, ever.** A tie-break cascade (return → fewer trades → lower
   drawdown → deterministic agent-id order) always yields a full ranking.
 

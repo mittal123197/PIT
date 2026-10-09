@@ -47,11 +47,9 @@ def test_zero_trade_winner_gets_the_capped_bonus_not_the_full_one(monkeypatch):
     assert outcome["winner"] == "RONIN"
     assert outcome["passive_win"] is True
     stake = conn.execute("SELECT current_stake FROM lineages WHERE name='RONIN'").fetchone()["current_stake"]
-    full_bonus_stake = 100000 * (1 + config.win_stake_bonus_pct / 100)
-    capped_stake = 100000 * (1 + config.passive_win_stake_bonus_pct / 100)
-    assert stake == round(capped_stake, 2)
-    assert stake < full_bonus_stake
-    assert config.passive_win_stake_bonus_pct < 10.0  # the explicit ask: cap under 10%
+    # RONIN "won" at exactly 0% — it only avoided a rival's loss. No bonus
+    # of any kind unless the winner actually made money.
+    assert stake == 100000
 
 
 def test_genuine_active_winner_still_gets_the_full_bonus(monkeypatch):

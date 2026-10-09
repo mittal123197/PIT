@@ -120,6 +120,13 @@ class ArenaConfig:
     # (dead last, already penalized more, absorbs proportionally more of it
     # too) — never dumped entirely onto one rank, and never on top of the
     # existing penalty for free.
+    # Whether stakes compound round to round (winner's capital grows, losers'
+    # shrink). OFF by default: with it on, a few rounds produced a 4-5x
+    # spread ($1,833 vs $404), which both makes dollar results incomparable
+    # across agents and lets early luck snowball into a capital advantage.
+    # Off = every agent starts every round at base_capital; ELO + rank are
+    # the long-term scoreboard instead. PIT_STAKE_EVOLUTION=1 restores it.
+    stake_evolution: int = _env_int("PIT_STAKE_EVOLUTION", 0)
     win_positive_delta_bonus_pct: float = _env_float("PIT_WIN_POSITIVE_DELTA_BONUS_PCT", 5.0)
 
     # Per-POSITION hard stop — separate from the portfolio-level one above.

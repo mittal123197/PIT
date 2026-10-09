@@ -127,7 +127,9 @@ def start_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
         conn.execute(
             """INSERT INTO round_states (round_id, agent_id, starting_capital,
                current_capital, holdings) VALUES (?,?,?,?, '{}')""",
-            (rid, lin["current_agent_id"], lin["current_stake"], lin["current_stake"]))
+            (rid, lin["current_agent_id"], *([lin["current_stake"]] * 2
+                                              if config.stake_evolution
+                                              else [config.base_capital] * 2)))
     conn.commit()
     return rid
 
@@ -520,14 +522,20 @@ def _resolve(conn, rnd, config, price) -> dict:
     # the base bonus below pays out even when 1st just lost the least. This
     # extra only fires on a genuinely positive return, and it's funded by
     # redistribution (see the losers' loop below), not printed for free.
-    positive_delta_bonus = (config.win_positive_delta_bonus_pct
-                            if not all_stopped_out and summaries[winner_id].return_pct > 0
-                            else 0.0)
-    wd = (config.passive_win_stake_bonus_pct if passive_win
-         else config.win_stake_bonus_pct) / 100.0
-    stake_mult[winner_id] = 1 + wd + positive_delta_bonus / 100.0
+    # No bonus of any kind unless the winner actually made money: coming
+    # 1st at 0% or below just means it lost the least, and that shouldn't
+    # grow its stake.
+    made_money = (not all_stopped_out) and summaries[winner_id].return_pct > 0
+    positive_delta_bonus = config.win_positive_delta_bonus_pct if made_money else 0.0
+    wd = ((config.passive_win_stake_bonus_pct if passive_win
+           else config.win_stake_bonus_pct) / 100.0) if made_money else 0.0
+    # Stakes only compound when stake_evolution is on; otherwise everyone
+    # stays flat and multipliers are recorded as 1.0 (the honest value).
+    stake_mult[winner_id] = ((1 + wd + positive_delta_bonus / 100.0)
+                             if config.stake_evolution else 1.0)
+    flat = None if config.stake_evolution else config.base_capital
     _apply_lineage(conn, agents_by_id[winner_id]["lineage_id"],
-                   summaries[winner_id].return_pct, True, stake_mult[winner_id])
+                   summaries[winner_id].return_pct, True, stake_mult[winner_id], flat)
 
     # Base penalty per loser, computed before redistribution — dead last
     # takes the full penalty, anyone strictly in the middle takes a smaller
@@ -545,12 +553,12 @@ def _resolve(conn, rnd, config, price) -> dict:
         share = (base_penalty[aid] / total_base_penalty) if total_base_penalty else (
             1.0 / len(losers) if losers else 0.0)
         penalty_pct = base_penalty[aid] + positive_delta_bonus * share
-        stake_mult[aid] = 1 - penalty_pct / 100.0
+        stake_mult[aid] = (1 - penalty_pct / 100.0) if config.stake_evolution else 1.0
         notes[aid] = _reflect_loser(conn, rnd["id"], agents_by_id[aid],
                                     agents_by_id[aid]["rating"] + net_delta[aid],
                                     summaries[aid].return_pct)
         _apply_lineage(conn, agents_by_id[aid]["lineage_id"],
-                       summaries[aid].return_pct, False, stake_mult[aid])
+                       summaries[aid].return_pct, False, stake_mult[aid], flat)
 
     for rank_pos, aid in enumerate(ranking, start=1):
         conn.execute(
@@ -601,9 +609,10 @@ def _resolve(conn, rnd, config, price) -> dict:
             "reflection": reflection}
 
 
-def _apply_lineage(conn, lid, ret, won, mult):
+def _apply_lineage(conn, lid, ret, won, mult, flat_stake=None):
     lin = conn.execute("SELECT * FROM lineages WHERE id=?", (lid,)).fetchone()
-    new_stake = max(1.0, lin["current_stake"] * mult)
+    new_stake = (flat_stake if flat_stake is not None
+                 else max(1.0, lin["current_stake"] * mult))
     new_cum = ((1 + lin["cumulative_return_pct"] / 100) * (1 + ret / 100) - 1) * 100
     conn.execute("""UPDATE lineages SET current_stake=?, cumulative_return_pct=?,
                  wins=wins+?, losses=losses+? WHERE id=?""",
