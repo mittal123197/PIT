@@ -103,6 +103,15 @@ fi
 echo $$ > "$LOCK_FILE"
 trap 'rm -f "$LOCK_FILE"' EXIT
 
+# ---- keep the Mac awake for the whole run (macOS) ----
+# A 30-min round was silently frozen for ~12 minutes when the machine slept
+# mid-run: no ticks, no marks, then everything resolved at once on wake —
+# final returns marked at the wrong time. caffeinate holds the system awake
+# for exactly as long as this script lives.
+if command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -i -s -w $$ &
+fi
+
 log "PIT arena runner — mode=$MODE battles=$BATTLES $(date '+%Y-%m-%d %H:%M:%S')"
 log "Full log: $RUN_LOG"
 
