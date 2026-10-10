@@ -178,6 +178,7 @@ class ArenaConfig:
     reflection_interval: int = _env_int("PIT_REFLECTION_INTERVAL", 1)
     max_proposals_per_round: int = _env_int("PIT_MAX_PROPOSALS_PER_ROUND", 3)
     max_active_guidelines: int = _env_int("PIT_MAX_ACTIVE_GUIDELINES", 12)
+    max_adoptions_per_round: int = _env_int("PIT_MAX_ADOPTIONS_PER_ROUND", 1)
     reflection_min_sample: int = _env_int("PIT_REFLECTION_MIN_SAMPLE", 3)
     reflection_pattern_frac: float = _env_float("PIT_REFLECTION_PATTERN_FRAC", 0.6)
 

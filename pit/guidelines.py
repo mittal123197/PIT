@@ -327,7 +327,9 @@ def _llm_vote(lin, proposal):
 # and a fallback vote rule that made winners reflexively reject new rules.
 
 ARENA_FACTS = ("Arena facts: long-only paper trading (no leverage, no shorting, "
-               "no options); fractional quantities allowed; portfolio and "
+               "no options); the ONLY orders are immediate buys/sells at the current "
+               "price — agents cannot place stop, limit or take-profit orders, and "
+               "nothing persists between wake-ups; fractional quantities allowed; portfolio and "
                "per-position stop-losses fire automatically, and every open "
                "position is force-closed by the arena at the round's deadline "
                "(agents can't choose to keep or close it); each agent decides "
@@ -356,6 +358,16 @@ def _names_a_ticker(text: str, symbols: set[str]) -> bool:
         if tok in symbols or tok.endswith("-USD"):
             return True
     return False
+
+
+_VAGUE_STARTS = ("monitor", "consider", "keep an eye", "be careful", "be mindful",
+                 "stay ", "remember", "think about", "pay attention", "watch ")
+
+
+def _vague(text: str) -> bool:
+    """'Monitor RSI…', 'Consider the trend…' — advice, not a rule anyone can
+    follow or check. The first agent-written rulebook filled up with these."""
+    return text.lower().lstrip().startswith(_VAGUE_STARTS)
 
 
 def _normalise_rule(text: str, practice: str) -> tuple[str, str]:
@@ -430,8 +442,10 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
              "bad practice to AVOID, or removing a current rule your experience "
              "contradicts. A rule must be GENERAL — it must apply to any stock or "
              "coin, so NEVER name a ticker, coin or company. It must be concrete "
-             "and actionable (e.g. a condition in the data table and what to do "
-             "about it), ONE idea in one sentence, possible in this arena (see arena facts), and not repeat "
+             "and actionable: a decision rule of the form 'when <condition you can "
+             "read in the data table or your book>, <buy / sell / size / don't "
+             "buy>' — words like 'monitor' or 'consider' alone are not rules. ONE "
+             "idea in one sentence, possible in this arena (see arena facts), and not repeat "
              "a current rule. Generic advice ('trade carefully') is useless. Most "
              "rounds deserve no new rule — if nothing is clearly worth it, say "
              "none. Return JSON "
@@ -454,6 +468,8 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
     text, practice = _normalise_rule(str(data.get("text", "")),
                                      "bad" if data.get("practice") == "bad" else "good")
     if len(text) < 12 or _names_a_ticker(text, symbols or set()):
+        return None
+    if _vague(text):
         return None
     return {"kind": "add", "practice": practice,
             "text": text[:200], "guideline_id": None, "proposer": lin["name"],
@@ -549,14 +565,24 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
         agree = sum(1 for v, _ in votes if v == "agree")
         # strict majority of the WHOLE pool — two abstentions can't let one
         # agent's vote write a rule for everyone
-        accepted = agree * 2 > len(lineages)
-        if accepted:
-            _apply(conn, p)
-        conn.execute("UPDATE guideline_proposals SET resolution=?, resolved_at=? WHERE id=?",
-                     ("accepted" if accepted else "rejected", _now(), pid))
-        conn.commit()
+        passed = agree * 2 > len(lineages)
         results.append({"proposal_id": pid, "kind": p["kind"], "practice": p["practice"],
                         "text": p["text"], "proposer": p["proposer"],
                         "evidence": p.get("evidence", ""), "agree": agree,
-                        "total": len(lineages), "accepted": accepted})
+                        "total": len(lineages), "accepted": passed, "_p": p})
+    # Rule inflation guard: adopt at most N per round — the ones with the most
+    # support (ties: whoever proposed first). Without it the 7B agents voted
+    # in nearly every proposal and the rulebook grew by ~3 rules a round.
+    winners = sorted((r for r in results if r["accepted"]),
+                     key=lambda r: -r["agree"])[:config.max_adoptions_per_round]
+    keep = {r["proposal_id"] for r in winners}
+    for r in results:
+        if r["accepted"] and r["proposal_id"] not in keep:
+            r["accepted"], r["note"] = False, "passed but over this round's adoption limit"
+        if r["accepted"]:
+            _apply(conn, r["_p"])
+        conn.execute("UPDATE guideline_proposals SET resolution=?, resolved_at=? WHERE id=?",
+                     ("accepted" if r["accepted"] else "rejected", _now(), r["proposal_id"]))
+        r.pop("_p")
+    conn.commit()
     return results

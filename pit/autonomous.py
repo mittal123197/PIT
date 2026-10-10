@@ -75,6 +75,12 @@ How you trade is entirely your call: how many positions, how big, how long you \
 hold, whether you trade often or rarely, concentrate or spread out. Nothing \
 here is a strategy hint — the only rules are the hard ones below.
 
+Order mechanics: the only orders are buys and sells executed immediately at \
+the current price when you decide. There are NO stop orders, limit orders or \
+take-profit orders you can place, and nothing you send persists until your \
+next wake-up — if you want out of something later, you sell it later. The \
+only automatic exits are the arena's own, below.
+
 Hard rules, both enforced automatically (you don't have to act on them, but \
 you can't stop them): (1) a PORTFOLIO stop-loss liquidates your entire book if \
 its aggregate return falls too far. (2) a PER-POSITION stop-loss force-sells \
