@@ -139,13 +139,18 @@ def universe_for(mode: str) -> list[dict]:
     """mode: 'full' (every NASDAQ/NYSE/AMEX common stock, thousands of
     tickers, includes illiquid/delisted noise), 'top500' (S&P 500
     constituents only — real and published, quality-filtered but still
-    genuinely diverse), or 'crypto' (a fixed curated list of liquid pairs —
+    genuinely diverse), 'top100' (a curated list of 100 large liquid US names), or 'crypto' (a fixed curated list of liquid pairs —
     see _CRYPTO_UNIVERSE). Falls back to 'full' if the S&P mirror is down."""
     if mode == "top500":
         pool = sp500_universe()
         return pool or full_universe()
     if mode == "crypto":
         return _CRYPTO_UNIVERSE
+    if mode == "top100":
+        from .top100 import TOP100
+        sp = {r["symbol"]: r for r in sp500_universe()}
+        return [{"symbol": t, "name": sp.get(t, {}).get("name", ""),
+                 "sector": sp.get(t, {}).get("sector", "")} for t in TOP100]
     return full_universe()
 
 

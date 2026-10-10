@@ -137,6 +137,46 @@ instead of amount_inr. Fractional shares are allowed, so you can buy a stock \
 priced above your cash by sizing the amount to what you can afford."""
 
 
+_BRIEF_TOOLS = """You have NO research tools to call and no web to browse. Instead, every \
+time you wake up you receive ONE complete data table covering your whole \
+tradeable universe (below the instructions, as MARKET BRIEF): for every name \
+its sector, price, recent returns (1d/5d/20d), trend (price vs its 20- and \
+50-day moving average), RSI14, position in its 52-week range, today's volume \
+vs normal, and fundamentals — forward P/E, profit margin, revenue growth, \
+earnings growth, ROE, debt/equity, analyst rating and the analyst target's \
+upside. A "." means not available. Everyone in the pool sees the same table. \
+You are free to trade ANY ticker in it, chosen on your own thesis — growth, \
+value, quality, momentum, mean-reversion, defensives, whatever you believe \
+wins. You make ONE decision per wake-up, then sleep until the next one \
+(several minutes), so size and choose positions you are happy to hold \
+between wake-ups.
+
+"""
+
+_BRIEF_FORMAT = """Respond ONLY with JSON of this shape:
+{
+  "thoughts": "brief reasoning",
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"reason":"..."} ],
+  "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
+  "done": true,
+  "notes": "carry-forward notes to your future self"
+}
+Set done=true always — this is your one decision for this wake-up; use an empty \
+"orders" list to hold. Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what \
+you hold. Amounts are in your account currency. You may also give "qty" (shares, \
+fractional OK) instead of amount_inr."""
+
+
+def _system_prompt_brief() -> str:
+    """The same battle/rules prompt, minus the research-tool loop: opening
+    framing + the brief explanation + everything from 'Actively manage' on,
+    with the JSON format swapped for the single-decision one."""
+    a = _SYSTEM.index("You have NO watchlist")
+    b = _SYSTEM.index("Actively manage your book")
+    c = _SYSTEM.index("Respond ONLY with JSON")
+    return _SYSTEM[:a] + _BRIEF_TOOLS + _SYSTEM[b:c] + _BRIEF_FORMAT
+
+
 _UNIVERSE_BLOCK: str | None = None
 
 
@@ -159,7 +199,8 @@ def _system_prompt() -> str:
 
 
 def decide(view: dict, day: int, total_days: int, goal_pct: float,
-           guidelines: list[str], model: str | None = None
+           guidelines: list[str], model: str | None = None,
+           brief: dict | None = None
            ) -> tuple[list[dict], str, str, list[dict]]:
     """Run the research→decide loop.
 
@@ -200,16 +241,29 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
     }
-    messages = [
-        {"role": "system", "content": _system_prompt()},
-        {"role": "user", "content": json.dumps(context)},
-    ]
+    if brief:
+        # one shared data table, one decision — no research loop
+        max_turns = 0
+        messages = [
+            {"role": "system", "content": _system_prompt_brief()},
+            {"role": "user", "content": json.dumps(context)},
+            {"role": "user", "content": f"MARKET BRIEF as of {brief['asof']} "
+                                        f"({brief['n']} names):\n{brief['text']}"},
+        ]
+    else:
+        max_turns = MAX_RESEARCH_TURNS
+        messages = [
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": json.dumps(context)},
+        ]
 
-    for turn in range(MAX_RESEARCH_TURNS + 1):
-        force = turn == MAX_RESEARCH_TURNS
+    for turn in range(max_turns + 1):
+        force = turn == max_turns
         if force:
             messages.append({"role": "user",
-                             "content": "Final turn — you MUST return done=true with orders (or empty orders to hold)."})
+                             "content": "Decide now — you MUST return done=true with orders (or an empty list to hold)."
+                             if brief else
+                             "Final turn — you MUST return done=true with orders (or empty orders to hold)."})
         data = None
         active_model = model
         for attempt in range(3):

@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import autonomous, forward, market, replay
+from . import autonomous, brief as brief_mod, forward, market, replay
 from . import guidelines as gmod
 from .config import CURRENCY, DEFAULT, MARKET, ArenaConfig
 
@@ -102,6 +102,9 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
               f"{stake_txt}. Watch /live.\n",
               flush=True)
 
+    if not replay._STATE and brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
+        brief_mod.prefetch_fundamentals(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
+                                        verbose)
     end = time.time() + minutes * 60
     decision = 0
     decision_due = 0.0  # force a decision immediately
@@ -314,9 +317,24 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     # Threads overlap the LLM waits where the backend allows it (a hosted
     # API, or Ollama with OLLAMA_NUM_PARALLEL>1); a single-slot local server
     # just queues them, which costs nothing.
+    # one shared market brief per tick (fundamentals + technicals for the
+    # whole universe) -> every agent makes a single decision from it, instead
+    # of a multi-turn research loop. Not in replay (needs historical data).
+    brief = None
+    if (jobs and not replay._STATE and brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE)):
+        try:
+            brief = brief_mod.get_brief(market.TRADE_UNIVERSE_MODE)
+        except Exception as exc:
+            if verbose:
+                print(f"  [brief unavailable, falling back to research mode: {exc!r}]",
+                      flush=True)
+    if verbose and brief:
+        print(f"  [brief: {brief['n']} names, as of {brief['asof']}]", flush=True)
+    kw = {"brief": brief} if brief else {}
+
     def _decide(job):
         return autonomous.decide(job["view"], tick, 0, rnd["goal_pct"], guidelines,
-                                 model=job["cfg"].get("model"))
+                                 model=job["cfg"].get("model"), **kw)
     if jobs:
         workers = len(jobs) if os.getenv("PIT_PARALLEL_AGENTS", "1") != "0" else 1
         with ThreadPoolExecutor(max_workers=workers) as ex:
