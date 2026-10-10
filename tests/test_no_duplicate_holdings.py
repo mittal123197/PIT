@@ -1,9 +1,7 @@
-"""Agents can't buy a stock a rival already holds. The reveal is minimal
-(ticker symbols only, this round, no size/price/reasoning) and the block is
-enforced server-side (not just requested of the LLM), using a snapshot taken
-once at the start of each decision cycle — so processing order within a tick
-can't hand one agent a race-condition advantage over another.
-"""
+"""Agents see which tickers rivals hold (symbols only, snapshot from the
+start of the decision cycle) and may buy them anyway — the old "no buying
+what a rival holds" block was removed: first mover took the obvious names and
+pushed everyone else into thin ones, which is a bias, not a choice."""
 import os
 import sys
 
@@ -47,7 +45,7 @@ def test_drop_blocked_buys_only_strips_matching_buys():
     assert clean == [orders[1], orders[2]]
 
 
-def test_tick_rejects_a_buy_on_a_ticker_a_rival_already_holds(monkeypatch):
+def test_tick_allows_a_buy_on_a_ticker_a_rival_already_holds(monkeypatch):
     conn = _fresh_conn()
     config = ArenaConfig()
     rid = forward.start_round(conn, config, days=7)
@@ -74,7 +72,7 @@ def test_tick_rejects_a_buy_on_a_ticker_a_rival_already_holds(monkeypatch):
     ronin_holdings = json.loads(conn.execute(
         "SELECT holdings FROM round_states WHERE round_id=? AND agent_id=?",
         (rid, ronin_id)).fetchone()["holdings"])
-    assert "AAA" not in ronin_holdings  # the buy was rejected
+    assert ronin_holdings.get("AAA") == 5  # the buy went through
 
 
 def test_tick_allows_a_buy_on_a_ticker_nobody_else_holds(monkeypatch):

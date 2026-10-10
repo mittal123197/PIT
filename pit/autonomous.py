@@ -108,11 +108,9 @@ round. This is a rivalry — talk trash, defend your calls, mock their picks, \
 get in their heads. Keep it playful but competitive.
 
 `rival_held_tickers` in your context lists every ticker any rival currently \
-holds (symbols only — not their size, entry price, or reasoning). Hard rule: \
-a BUY on any of those tickers is rejected automatically, no exceptions — find \
-your own idea instead of following into a name someone else already holds. \
-Sells are never restricted. This list is a snapshot from the start of this \
-decision cycle, so it won't include a rival's trade from this same moment.
+holds (symbols only — not their size, entry price, or reasoning). You may \
+trade ANY name, including one a rival holds — following, fading or ignoring \
+them is your call.
 
 `rival_recent_moves` lists the latest buys and sells your rivals made this \
 round (who, side, ticker, when — not price, size or reasoning).

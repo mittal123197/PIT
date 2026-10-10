@@ -229,10 +229,6 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
         orders, notes, message, trace = autonomous.decide(
             view, day_index, rnd["length_days"], rnd["goal_pct"], guidelines,
             model=cfg.get("model"))
-        orders, blocked = _drop_blocked_buys(orders, set(view["rival_held_tickers"]))
-        if blocked:
-            logs.append(f"{_name(conn, aid)}: blocked buy on "
-                        f"{', '.join(blocked)} — already held by a rival")
         if debug:
             from .live import _persist_audit
             _persist_audit(conn, rnd["id"], aid, trace)

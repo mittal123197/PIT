@@ -462,10 +462,6 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     for job, (orders, notes, message, trace) in zip(jobs, decisions):
         aid, st, name, cfg, view = (job["aid"], job["st"], job["name"],
                                     job["cfg"], job["view"])
-        orders, blocked = forward._drop_blocked_buys(orders, set(view["rival_held_tickers"]))
-        if blocked and verbose:
-            print(f"  {name}: blocked buy on {', '.join(blocked)} — "
-                  f"already held by a rival", flush=True)
         if debug:
             _persist_audit(conn, rnd["id"], aid, trace)
         # Stamp fills/messages when this agent's decision actually lands —
