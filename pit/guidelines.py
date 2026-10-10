@@ -460,9 +460,11 @@ def _round_trades(conn, round_id, lineage_id) -> list[dict]:
 #  2. The ARENA backtests it against the pool's real ledger: every logged buy
 #     carries the table row the agent saw (trades.features) and its realised
 #     outcome. Buys matching the condition vs. buys that didn't.
-#  3. Evidence gates the vote: contradicted -> rejected without a vote;
-#     supported -> a majority of the pool adopts it; untested or inconclusive
-#     -> needs every other agent too, and enters on probation.
+#  3. Evidence gates the vote: contradicted, inconclusive (enough trades,
+#     no edge), no matching trades at all, or a duplicate/mirror of an active
+#     rule -> vetoed without a vote; supported -> a majority of the pool
+#     adopts it; untested (a few trades, not enough to judge) -> needs every
+#     other agent too, and enters on probation.
 #  4. Every round all active rules are re-tested; a rule the ledger turns
 #     against is retired automatically, a probation rule the data backs
 #     becomes proven. The rulebook is kept honest by outcomes, not opinions.
@@ -593,6 +595,35 @@ def backtest(spec: dict, practice: str, outcomes: list[dict]) -> dict:
     return ev
 
 
+def _match_ids(spec: dict, outcomes: list[dict]) -> tuple[set, set]:
+    m, o = set(), set()
+    for i, r in enumerate(outcomes):
+        hit = _matches(spec, r["features"])
+        if hit is True:
+            m.add(i)
+        elif hit is False:
+            o.add(i)
+    return m, o
+
+
+def _duplicate_of(p: dict, active: list[dict], outcomes: list[dict],
+                  thresh: float = 0.85) -> str | None:
+    """An active rule that selects (nearly) the same trades — or, with the
+    opposite practice, the mirror image ("AVOID 5d% < 0" vs "DO 5d% > 0 ...")
+    — is the same evidence counted twice. Jaccard overlap on the ledger."""
+    new_m, _ = _match_ids(p["spec"], outcomes)
+    if len(new_m) < 3:
+        return None
+    for g in active:
+        if not g.get("spec"):
+            continue
+        gm, go = _match_ids(json.loads(g["spec"]), outcomes)
+        other = gm if g["practice"] == p["practice"] else go
+        if other and len(new_m & other) / len(new_m | other) >= thresh:
+            return f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}"
+    return None
+
+
 def evidence_label(ev: dict | None) -> str:
     if not ev:
         return "unverifiable (legacy free-text rule)"
@@ -615,7 +646,14 @@ def review_rules(conn) -> list[dict]:
         spec = json.loads(g["spec"])
         ev = backtest(spec, g["practice"], outcomes)
         conn.execute("UPDATE guidelines SET evidence=? WHERE id=?", (json.dumps(ev), g["id"]))
-        if ev["verdict"] == "contradicted":
+        if ev["verdict"] == "inconclusive" and g.get("tier") != "proven":
+            # a probation rule that now has enough trades and still shows no edge
+            conn.execute("UPDATE guidelines SET status='retired', retired_at=?, "
+                         "retired_reason=? WHERE id=?",
+                         (_now(), "probation ended with no edge: " + evidence_label(ev), g["id"]))
+            events.append({"action": "retired", "text": g["text"], "practice": g["practice"],
+                           "evidence": ev})
+        elif ev["verdict"] == "contradicted":
             conn.execute("UPDATE guidelines SET status='retired', retired_at=?, "
                          "retired_reason=? WHERE id=?",
                          (_now(), "ledger contradicts it: " + evidence_label(ev), g["id"]))
@@ -780,6 +818,15 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
         if (p["kind"] == "add" and verdict == "contradicted") or \
            (p["kind"] == "remove" and verdict == "supported"):
             r["note"] = "vetoed by the ledger: " + evidence_label(ledger)
+            continue
+        # Enough trades on both sides and still no edge: the data has spoken
+        # — probation is for rules we can't judge yet, not ones that don't work
+        if p["kind"] == "add" and verdict == "inconclusive":
+            r["note"] = "vetoed: no edge in the data — " + evidence_label(ledger)
+            continue
+        dup = _duplicate_of(p, active_guidelines(conn), outcomes) if p["kind"] == "add" else None
+        if dup:
+            r["note"] = f"vetoed: selects the same trades as active rule \"{dup}\""
             continue
         # No logged buy has ever matched the condition: there is no evidence
         # at all, and an AVOID rule adopted now could never be tested later

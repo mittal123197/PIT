@@ -109,3 +109,22 @@ def test_review_retires_a_rule_the_ledger_turns_against(monkeypatch):
     events = g.review_rules(c)
     assert events and events[0]["action"] == "retired"
     assert g.active_texts(c) == []
+
+
+def test_inconclusive_rule_is_vetoed(monkeypatch):
+    c = _conn(); _ledger(c, 0.1, 0.1, n=6)                         # same outcome both sides
+    monkeypatch.setattr(g, "_ask_json", _fake({"RONIN": RSI_DO}, {}, []))
+    res = g.pool_constitution(c, ArenaConfig(), None)
+    assert res[0]["resolution"] == "vetoed" and "no edge" in res[0]["note"]
+
+
+def test_mirror_of_an_active_rule_is_vetoed(monkeypatch):
+    c = _conn(); _ledger(c, 1.0, -1.0)
+    monkeypatch.setattr(g, "_ask_json", _fake(
+        {"RONIN": RSI_DO}, {("LYNX", "RSI14"): {"vote": "agree"}}, []))
+    g.pool_constitution(c, ArenaConfig(), None)                    # DO buy when RSI14 < 30
+    mirror = {"kind": "add", "practice": "bad", "when": [["RSI14", ">=", 30]]}
+    monkeypatch.setattr(g, "_ask_json", _fake(
+        {"VIPER": mirror}, {("LYNX", "RSI14"): {"vote": "agree"}}, []))
+    res = [r for r in g.pool_constitution(c, ArenaConfig(), None) if r.get("kind")]
+    assert res[0]["resolution"] == "vetoed" and "same trades" in res[0]["note"]

@@ -178,8 +178,9 @@
     every round each agent may propose one entry rule over the data table. The arena
     backtests it on every logged buy: if the ledger contradicts it, it is vetoed
     without a vote. If it shows an edge, a majority of the other agents adopts it.
-    With too few trades to tell, every other agent must agree and the rule enters on
-    probation. Rules are re-tested each round, and any rule the data turns against
+    A rule the data finds no edge in, or one that just mirrors an
+    existing rule, is vetoed too. With too few trades to tell, every other agent must
+    agree and the rule enters on probation. Rules are re-tested each round, and any rule the data turns against
     is retired.</div></div>
 <div class="panel">
   <div style="padding:16px 20px;">
@@ -218,7 +219,7 @@
             {{ 'DO' if p.practice == 'good' else 'AVOID' }}</span></td>
         <td class="hide-sm mono" style="font-size:11.5px;max-width:260px;white-space:normal;" title="{{ p.ledger.label if p.ledger else '' }}">
           {% if p.ledger %}<span class="{{ 'up' if p.ledger.verdict == 'supported' else 'down' if p.ledger.verdict == 'contradicted' else 'muted' }}">{{ p.ledger.verdict }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td class="mono">{{ p.agree or 0 }}/{{ p.total or 0 }}</td>
+        <td class="mono">{% if p.resolution == 'vetoed' %}<span class="muted">no vote</span>{% else %}{{ p.agree or 0 }}/{{ p.total or 0 }}{% endif %}</td>
         <td>
           {% if p.resolution == 'accepted' and p.now == 'retired' %}<span class="pill status">adopted · retired</span>
           {% elif p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>

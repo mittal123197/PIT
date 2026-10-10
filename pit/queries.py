@@ -272,7 +272,10 @@ def live_status(conn: sqlite3.Connection) -> dict | None:
 
 def live_view(conn: sqlite3.Connection) -> dict | None:
     """The active (or most recent) live session — agents, positions, banter."""
-    r = conn.execute("SELECT * FROM rounds WHERE status IN ('live','ended') "
+    # a resolved round stays on the page (as "session ended") until the next
+    # one starts — it used to vanish into "No live session yet" the moment
+    # the round resolved, right when you want to see the final books
+    r = conn.execute("SELECT * FROM rounds WHERE status IN ('live','ended','resolved') "
                      "ORDER BY id DESC LIMIT 1").fetchone()
     if not r:
         return None
