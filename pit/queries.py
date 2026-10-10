@@ -436,11 +436,15 @@ def race_series(conn, round_id: int) -> list[dict]:
     return series
 
 
+def _pct_label(v: float) -> str:
+    return "0.00%" if abs(v) < 0.005 else f"{v:+.2f}%"
+
+
 def race_chart(series: list[dict], width: int = 860, height: int = 230) -> str:
     """Every agent's return % over a session (x = elapsed time)."""
-    return line_chart(series, y_fmt=lambda v: f"{v:+.2f}%",
+    return line_chart(series, y_fmt=_pct_label,
                       x_fmt=lambda t, t0: _fmt_secs(t - t0) if t > t0 else "start",
-                      end_fmt=lambda v: f"{v:+.2f}%", width=width, height=height,
+                      end_fmt=_pct_label, width=width, height=height,
                       zero_line=0.0, aria="Return over time for each agent")
 
 

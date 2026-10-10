@@ -58,7 +58,7 @@
     {% endif %}
     <span><span class="k">portfolio stop</span><span class="mono down">−{{ '%.1f'|format(data.risk.stop) }}%</span></span>
     {% if data.risk.goal %}<span><span class="k">take-profit</span><span class="mono up">+{{ '%.1f'|format(data.risk.goal) }}%</span></span>{% endif %}
-    <span><span class="k">per-position stop</span><span class="mono down">−{{ '%.0f'|format(data.risk.position_stop) }}%</span></span>
+    <span title="applied to every buy unless the agent sets its own"><span class="k">default position stop</span><span class="mono down">−{{ '%.0f'|format(data.risk.position_stop) }}%</span></span>
   </div>
   {% if data.timing %}<div class="progress"><div style="width:{{ data.timing.pct }}%;"></div></div>{% endif %}
 </div>
