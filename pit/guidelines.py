@@ -328,7 +328,9 @@ def _llm_vote(lin, proposal):
 
 ARENA_FACTS = ("Arena facts: long-only paper trading (no leverage, no shorting, "
                "no options); fractional quantities allowed; portfolio and "
-               "per-position stop-losses fire automatically; each agent decides "
+               "per-position stop-losses fire automatically, and every open "
+               "position is force-closed by the arena at the round's deadline "
+               "(agents can't choose to keep or close it); each agent decides "
                "once per wake-up (every few minutes) from a shared data table of "
                "price, returns, moving-average trend, RSI14, 52-week position, "
                "volume and fundamentals; the pool is ranked by return at the deadline.")
@@ -399,11 +401,15 @@ def _ask_json(model: str | None, system: str, payload: dict) -> dict | None:
 def _round_trades(conn, round_id, lineage_id) -> list[dict]:
     if round_id is None:
         return []
-    return [dict(r) for r in conn.execute(
+    from .forward import is_forced
+    rows = [dict(r) for r in conn.execute(
         """SELECT t.side, t.symbol, round(t.price, 6) AS price, t.reason
            FROM trades t JOIN agents a ON a.id=t.agent_id
            WHERE t.round_id=? AND a.lineage_id=? ORDER BY t.id LIMIT 30""",
         (round_id, lineage_id))]
+    for r in rows:
+        r["forced_by_arena"] = is_forced(r["reason"])
+    return rows
 
 
 def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = None,

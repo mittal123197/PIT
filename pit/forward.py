@@ -660,10 +660,27 @@ def _rival_recent_moves(conn, round_id, self_aid, limit=8) -> list[dict]:
     return out
 
 
+FORCED_REASONS = ("round-end close", "stop-loss", "goal-hit")
+
+
+def is_forced(reason: str | None) -> bool:
+    """A fill the ARENA made (deadline close-out, portfolio stop, take-profit,
+    per-position stop) rather than the agent."""
+    r = reason or ""
+    return r in FORCED_REASONS or r.startswith("position stop")
+
+
 def _own_trades(conn, round_id, agent_id) -> list[dict]:
-    return [dict(r) for r in conn.execute(
+    """The agent's fills this round, each flagged forced_by_arena where the
+    arena made it. Unflagged, the deadline close-out read like the agent's own
+    choice — agents critiqued themselves for 'rushing to close at round-end'
+    and voted in rules about it, though they can't control it."""
+    rows = [dict(r) for r in conn.execute(
         "SELECT ts,symbol,side,qty,price,reason FROM trades "
         "WHERE round_id=? AND agent_id=? ORDER BY id", (round_id, agent_id))]
+    for r in rows:
+        r["forced_by_arena"] = is_forced(r["reason"])
+    return rows
 
 
 def _reflect_winner(conn, round_id, wa, return_pct) -> str:
@@ -758,6 +775,9 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool,
                 "own words: what does this round actually tell you about how you "
                 "should trade next time — what to keep doing and what to change? "
                 "Be specific to these trades and this market, not generic advice. "
+                "Trades marked forced_by_arena were made by the arena (the "
+                "deadline close-out or a stop-loss), not by you — judge your "
+                "entries, sizing and your own sells, not those. "
                 "Self-critique only, don't reference other traders. <=400 chars. "
                 "Return JSON {\"notes\":\"...\"}.")
             prompt = {"your_own_trades": own_trades[:40],
