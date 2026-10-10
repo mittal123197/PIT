@@ -265,13 +265,175 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
         a["value"] = round(a["starting_capital"] * (1 + ret / 100), 2)
         a["ret"] = ret
     agents.sort(key=lambda x: x["ret"], reverse=True)
+    # per-position live value + unrealized P&L from the last mark (no network)
+    st_extra = {r["agent_id"]: r for r in _rows(conn.execute(
+        "SELECT agent_id, cost_basis, mark_prices FROM round_states WHERE round_id=?",
+        (r["id"],)))}
+    for a in agents:
+        ex = st_extra.get(a["agent_id"], {})
+        cost = _json(ex.get("cost_basis"))
+        marks = _json(ex.get("mark_prices"))
+        pos = []
+        for sym, qty in a["holdings"].items():
+            px = marks.get(sym) or cost.get(sym)
+            c = cost.get(sym)
+            pos.append({"symbol": sym, "qty": qty, "price": px, "cost": c,
+                        "value": round(qty * (px or 0), 2),
+                        "pnl_pct": round((px / c - 1) * 100, 2) if px and c else None})
+        pos.sort(key=lambda p: p["value"], reverse=True)
+        a["positions"] = pos
+        total = a["value"] or 1.0
+        a["alloc"] = ([{"label": p["symbol"], "pct": max(0.0, p["value"] / total * 100)}
+                       for p in pos] +
+                      [{"label": "cash", "pct": max(0.0, a["current_capital"] / total * 100)}])
     messages = _rows(conn.execute(
         """SELECT m.ts, m.message, m.kind, l.name, l.id AS lineage_id
            FROM agent_messages m JOIN agents a ON a.id = m.agent_id
            JOIN lineages l ON l.id = a.lineage_id
            WHERE m.round_id=? ORDER BY m.id""", (r["id"],)))
-    return {"round": dict(r), "agents": agents, "messages": messages,
-            "is_live": r["status"] == "live"}
+    rd = dict(r)
+    timing = _session_timing(rd)
+    series = race_series(conn, r["id"])
+    return {"round": rd, "agents": agents, "messages": messages,
+            "is_live": r["status"] == "live", "timing": timing,
+            "race_svg": race_chart(series), "risk": _risk_bands(rd)}
+
+
+def _json(v) -> dict:
+    try:
+        return json.loads(v) if v else {}
+    except Exception:
+        return {}
+
+
+def _parse_local(ts):
+    from datetime import datetime as _dt
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            d = _dt.strptime(ts, fmt)
+            return d.astimezone().replace(tzinfo=None) if d.tzinfo else d
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _session_timing(rd: dict) -> dict | None:
+    """Elapsed / remaining for a live session and the next agent wake-up."""
+    from datetime import datetime as _dt, timedelta
+    start = _parse_local(rd.get("created_at"))
+    end = _parse_local(rd.get("ends_at"))
+    if not start or not end or end <= start:
+        return None
+    now = _dt.now()
+    total = (end - start).total_seconds()
+    done = min(max((now - start).total_seconds(), 0), total)
+    out = {"pct": round(done / total * 100, 1),
+           "remaining": _fmt_secs(max(0, (end - now).total_seconds())),
+           "elapsed": _fmt_secs(done), "next_wake": None}
+    last = _parse_local(rd.get("last_tick_at"))
+    if last and rd.get("interval_s"):
+        nxt = last + timedelta(seconds=rd["interval_s"])
+        secs = (nxt - now).total_seconds()
+        out["next_wake"] = "deciding now" if secs <= 0 else f"in {_fmt_secs(secs)}"
+    return out
+
+
+def _fmt_secs(secs: float) -> str:
+    secs = int(secs)
+    return f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+
+
+def _risk_bands(rd: dict) -> dict:
+    return {"stop": DEFAULT.stop_loss_pct_for(rd.get("length_days") or 0),
+            "goal": rd.get("goal_pct"),
+            "position_stop": DEFAULT.position_stop_loss_pct}
+
+
+def race_series(conn, round_id: int) -> list[dict]:
+    rows = _rows(conn.execute(
+        """SELECT m.agent_id, m.ts, m.return_pct, l.name, l.id AS lineage_id
+           FROM round_marks m JOIN agents a ON a.id = m.agent_id
+           JOIN lineages l ON l.id = a.lineage_id
+           WHERE m.round_id=? ORDER BY m.id""", (round_id,)))
+    by: dict[int, dict] = {}
+    for r in rows:
+        t = _parse_local(r["ts"])
+        if not t:
+            continue
+        s = by.setdefault(r["agent_id"], {"name": r["name"],
+                                          "color": lineage_color(r["lineage_id"]),
+                                          "points": []})
+        s["points"].append((t.timestamp(), r["return_pct"]))
+    return list(by.values())
+
+
+def race_chart(series: list[dict], width: int = 860, height: int = 230) -> str:
+    """Server-rendered SVG: every agent's return % over the session, one line
+    each in its lineage colour, zero line, end-of-line labels. No JS, works
+    with the page's meta-refresh."""
+    pts = [p for s in series for p in s["points"]]
+    if len(pts) < 2:
+        return ""
+    t0, t1 = min(p[0] for p in pts), max(p[0] for p in pts)
+    lo, hi = min(min(p[1] for p in pts), 0.0), max(max(p[1] for p in pts), 0.0)
+    pad = max((hi - lo) * 0.15, 0.05)
+    lo, hi = lo - pad, hi + pad
+    L, R, T, B = 46, 110, 14, 26
+    w, h = width - L - R, height - T - B
+    X = lambda t: L + (t - t0) / ((t1 - t0) or 1) * w
+    Y = lambda v: T + (hi - v) / (hi - lo) * h
+    out = [f'<svg viewBox="0 0 {width} {height}" width="100%" preserveAspectRatio="none" '
+           'role="img" aria-label="Return over time for each agent" '
+           'style="display:block;max-height:260px;">']
+    # gridlines + y labels
+    step = _nice_step((hi - lo) / 4)
+    v = (lo // step) * step
+    while v <= hi:
+        y = Y(v)
+        if T - 1 <= y <= T + h + 1:
+            zero = abs(v) < step / 1000
+            out.append(f'<line x1="{L}" x2="{L + w}" y1="{y:.1f}" y2="{y:.1f}" '
+                       f'stroke="{"#6C7076" if zero else "#23262e"}" stroke-width="1"'
+                       f'{"" if zero else " stroke-dasharray=\"2 4\""}/>')
+            out.append(f'<text x="{L - 8}" y="{y + 4:.1f}" text-anchor="end" '
+                       f'font-size="10" fill="#6C7076" font-family="IBM Plex Mono">'
+                       f'{v:+.2f}%</text>')
+        v += step
+    # x labels: elapsed minutes
+    for frac in (0, 0.5, 1):
+        t = t0 + (t1 - t0) * frac
+        out.append(f'<text x="{X(t):.1f}" y="{height - 6}" text-anchor="middle" '
+                   f'font-size="10" fill="#6C7076" font-family="IBM Plex Mono">'
+                   f'{_fmt_secs(t - t0) if frac else "start"}</text>')
+    # lines + end labels (nudged apart so they don't overlap)
+    ends = []
+    for s in series:
+        p = s["points"]
+        d = " ".join(f"{'M' if i == 0 else 'L'}{X(t):.1f},{Y(v):.1f}" for i, (t, v) in enumerate(p))
+        out.append(f'<path d="{d}" fill="none" stroke="{s["color"]}" stroke-width="2.2" '
+                   'stroke-linejoin="round" stroke-linecap="round"/>')
+        ends.append([Y(p[-1][1]), s, p[-1]])
+    ends.sort(key=lambda e: e[0])
+    for i in range(1, len(ends)):
+        ends[i][0] = max(ends[i][0], ends[i - 1][0] + 14)
+    for y, s, (t, v) in ends:
+        out.append(f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="3.5" fill="{s["color"]}"/>')
+        out.append(f'<text x="{L + w + 10}" y="{y + 4:.1f}" font-size="11.5" '
+                   f'fill="{s["color"]}" font-family="IBM Plex Mono" font-weight="600">'
+                   f'{s["name"]} {v:+.2f}%</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def _nice_step(raw: float) -> float:
+    import math
+    if raw <= 0:
+        return 0.1
+    mag = 10 ** math.floor(math.log10(raw))
+    for m in (1, 2, 2.5, 5, 10):
+        if raw <= m * mag:
+            return m * mag
+    return 10 * mag
 
 
 def _ts_seconds(ts: str):
@@ -338,6 +500,8 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
                     lots[key].popleft()
 
     open_positions = []
+    marks = {r["agent_id"]: _json(r["mark_prices"]) for r in _rows(conn.execute(
+        "SELECT agent_id, mark_prices FROM round_states WHERE round_id=?", (round_id,)))}
     now = _ts_seconds(__import__("datetime").datetime.now().strftime("%H:%M:%S"))
     for (agent_id, symbol), q in lots.items():
         total_qty = sum(l["qty"] for l in q)
@@ -347,7 +511,10 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
         first_ts = q[0]["ts"]
         open_positions.append({
             "name": names.get(agent_id, "?"), "symbol": symbol,
-            "qty": total_qty, "avg_price": round(cost / total_qty, 2),
+            "qty": total_qty, "avg_price": round(cost / total_qty, 8),
+            "now_price": marks.get(agent_id, {}).get(symbol),
+            "pnl_pct": (round((marks[agent_id][symbol] / (cost / total_qty) - 1) * 100, 2)
+                        if marks.get(agent_id, {}).get(symbol) else None),
             "entry_ts": first_ts, "held": _fmt_hold(_ts_seconds(first_ts), now),
             "reason": q[0].get("reason", ""),
         })

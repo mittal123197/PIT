@@ -3,6 +3,14 @@
 {% block body %}
 {% if data and data.is_live %}
 <meta http-equiv="refresh" content="8">
+<script>
+  // the 8s refresh used to throw you back to the top of the page every time
+  (function () {
+    var k = "pit-live-scroll";
+    try { var y = sessionStorage.getItem(k); if (y) window.addEventListener("load", function () { window.scrollTo(0, +y); }); } catch (e) {}
+    window.addEventListener("beforeunload", function () { try { sessionStorage.setItem(k, window.scrollY); } catch (e) {} });
+  })();
+</script>
 {% endif %}
 
 <a href="/" class="backlink">← leaderboard</a>
@@ -12,37 +20,93 @@
   <p class="muted">No live session yet. Start one with
     <span class="mono">python3 -m pit.cli live</span>.</p>
 {% else %}
-<div style="display:flex;align-items:center;justify-content:space-between;
-  flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+<style>
+  .live-head{display:flex;align-items:center;justify-content:space-between;
+    flex-wrap:wrap;gap:10px;margin-bottom:10px;}
+  .sessbar{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:14px 18px;margin-bottom:16px;}
+  .sessbar .row{display:flex;flex-wrap:wrap;gap:8px 26px;font-size:12.5px;}
+  .sessbar .k{color:var(--ink-faint);font-family:'IBM Plex Mono';font-size:10.5px;
+    letter-spacing:.06em;text-transform:uppercase;margin-right:6px;}
+  .progress{height:6px;background:var(--line-soft);border-radius:4px;margin-top:12px;overflow:hidden;}
+  .progress > div{height:100%;background:var(--alpha);border-radius:4px;}
+  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:26px;}
+  @media (max-width:900px){.grid3{grid-template-columns:1fr;}}
+  .alloc{display:flex;height:9px;border-radius:5px;overflow:hidden;margin-top:14px;background:var(--line-soft);}
+  .alloc > span{display:block;height:100%;}
+  .poslist{margin-top:10px;font-size:12px;}
+  .poslist .r{display:flex;justify-content:space-between;gap:8px;padding:3px 0;
+    border-bottom:1px solid var(--line-soft);}
+  .poslist .r:last-child{border-bottom:none;}
+  .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;}
+</style>
+
+<div class="live-head">
   <div class="eyebrow" style="color:{{ 'var(--liq)' if data.is_live else 'var(--ink-faint)' }};">
-    {% if data.is_live %}● live — trading & talking{% else %}session ended{% endif %}</div>
-  {% if data.is_live %}<span class="mono muted" style="font-size:11px;">
-    auto-refreshing every 8s</span>{% endif %}
+    {% if data.is_live %}● live — round #{{ data.round.round_number }}{% else %}session ended — round #{{ data.round.round_number }}{% endif %}</div>
+  {% if data.is_live %}<span class="mono muted" style="font-size:11px;">auto-refreshing every 8s</span>{% endif %}
 </div>
-<div class="grid2" style="margin-bottom:26px;">
+
+<div class="sessbar">
+  <div class="row">
+    {% if data.timing %}
+      <span><span class="k">elapsed</span><span class="mono">{{ data.timing.elapsed }}</span></span>
+      <span><span class="k">remaining</span><span class="mono">{{ data.timing.remaining }}</span></span>
+      {% if data.timing.next_wake and data.is_live %}
+        <span><span class="k">agents wake</span><span class="mono">{{ data.timing.next_wake }}</span></span>
+      {% endif %}
+    {% endif %}
+    <span><span class="k">portfolio stop</span><span class="mono down">−{{ '%.1f'|format(data.risk.stop) }}%</span></span>
+    {% if data.risk.goal %}<span><span class="k">take-profit</span><span class="mono up">+{{ '%.1f'|format(data.risk.goal) }}%</span></span>{% endif %}
+    <span><span class="k">per-position stop</span><span class="mono down">−{{ '%.0f'|format(data.risk.position_stop) }}%</span></span>
+  </div>
+  {% if data.timing %}<div class="progress"><div style="width:{{ data.timing.pct }}%;"></div></div>{% endif %}
+</div>
+
+{% if data.race_svg %}
+<div class="sec" style="margin-top:6px;"><div class="eyebrow">The race</div>
+  <div class="subtitle">Every agent's return over the session, marked every few seconds.</div></div>
+<div class="panel racewrap" style="padding:14px 10px 6px;">{{ data.race_svg|safe }}</div>
+{% endif %}
+
+<div class="grid3">
   {% for a in data.agents %}
-  <div class="panel" style="margin-bottom:0;
-    border-color:{{ a.lineage_id|lcolor if loop.first else 'var(--line)' }};">
+  {% set col = a.lineage_id|lcolor %}
+  <div class="panel" style="margin-bottom:0;border-color:{{ col if loop.first else 'var(--line)' }};">
     <h2 style="display:flex;justify-content:space-between;align-items:center;">
-      <span><span class="dot" style="background:{{ a.lineage_id|lcolor }};"></span>{{ a.name }}</span>
+      <span><span class="dot" style="background:{{ col }};"></span>{{ a.name }}
+        <span class="mono muted" style="font-size:11px;font-weight:400;">#{{ loop.index }}</span></span>
       {% if loop.first %}<span class="pill gold">leading</span>{% endif %}
       {% if a.status == 'liquidated' %}<span class="pill lose">stopped out</span>{% endif %}
       {% if a.status == 'goal_hit' %}<span class="pill win">profit booked</span>{% endif %}
     </h2>
-    <div style="padding:16px 20px;">
-      <div style="font-family:'Space Grotesk';font-weight:700;font-size:30px;"
-        class="{{ 'up' if a.ret >= 0 else 'down' }}">{{ a.ret|pct }}</div>
-      <div class="mono muted" style="font-size:13px;margin-top:2px;">
+    <div style="padding:14px 18px 16px;">
+      <div style="font-family:'Space Grotesk';font-weight:700;font-size:30px;line-height:1.1;"
+        class="{{ 'up' if a.ret > -0.005 else 'down' }}">{{ a.ret|pct }}</div>
+      <div class="mono muted" style="font-size:12.5px;margin-top:4px;">
         {{ a.value|money2 }} <span class="muted">·</span> cash {{ a.current_capital|money2 }}
         <span class="muted">·</span> {{ a.trade_count }} trades</div>
-      <div style="margin-top:14px;">
-        {% if a.holdings %}
-          {% for sym, qty in a.holdings.items() %}
-            <span class="pill status" style="margin:2px 4px 2px 0;display:inline-block;">
-              {{ sym }} ×{{ qty|qty }}</span>
-          {% endfor %}
+      <div class="alloc" title="allocation: positions vs cash">
+        {% for seg in a.alloc %}
+          <span style="width:{{ '%.2f'|format(seg.pct) }}%;background:{{ 'var(--ink-faint)' if seg.label == 'cash' else col }};opacity:{{ 0.35 if seg.label == 'cash' else (1.0 - loop.index0 * 0.18) if loop.index0 < 4 else 0.3 }};"
+            title="{{ seg.label }} {{ '%.0f'|format(seg.pct) }}%"></span>
+        {% endfor %}
+      </div>
+      <div class="poslist">
+        {% for p in a.positions %}
+          <div class="r">
+            <span><span class="sw" style="background:{{ col }};opacity:{{ (1.0 - loop.index0 * 0.18) if loop.index0 < 4 else 0.3 }};"></span>
+              <span class="mono">{{ p.symbol }}</span></span>
+            <span class="mono muted">{{ p.value|money2 }}</span>
+            <span class="mono {{ 'up' if (p.pnl_pct or 0) > -0.005 else 'down' }}" style="min-width:58px;text-align:right;">
+              {{ p.pnl_pct|pct if p.pnl_pct is not none else '—' }}</span>
+          </div>
         {% else %}
-          <span class="muted" style="font-size:12.5px;">all cash — no open positions</span>
+          <div class="muted" style="font-size:12.5px;">all cash — no open positions</div>
+        {% endfor %}
+        {% if a.positions %}
+          <div class="r"><span><span class="sw" style="background:var(--ink-faint);opacity:.35;"></span><span class="mono muted">cash</span></span>
+            <span class="mono muted">{{ a.current_capital|money2 }}</span><span style="min-width:58px;"></span></div>
         {% endif %}
       </div>
     </div>
@@ -54,8 +118,8 @@
   <div class="subtitle">What each agent is holding right now — entry price and how long held.</div></div>
 <div class="panel">
   <table>
-    <thead><tr><th>Agent</th><th>Stock</th><th>Qty</th><th>Buy price</th>
-      <th>Held</th><th>Why it bought</th></tr></thead>
+    <thead><tr><th>Agent</th><th>Asset</th><th>Qty</th><th>Buy price</th>
+      <th>Now</th><th>P&amp;L</th><th>Held</th><th>Why it bought</th></tr></thead>
     <tbody>
     {% for p in trades.open_positions %}
       <tr>
@@ -63,11 +127,13 @@
         <td class="mono">{{ p.symbol }}</td>
         <td class="mono">{{ p.qty|qty }}</td>
         <td class="mono">{{ p.avg_price|price }}</td>
-        <td class="mono">{{ p.held }}</td>
-        <td style="font-size:12.5px;color:var(--ink-soft);max-width:340px;">{{ p.reason or '—' }}</td>
+        <td class="mono">{{ p.now_price|price if p.now_price else '—' }}</td>
+        <td class="mono {{ 'up' if (p.pnl_pct or 0) >= 0 else 'down' }}">{{ p.pnl_pct|pct if p.pnl_pct is not none else '—' }}</td>
+        <td class="mono" style="white-space:nowrap;">{{ p.held }}</td>
+        <td style="font-size:12.5px;color:var(--ink-soft);min-width:220px;max-width:340px;">{{ p.reason or '—' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="muted" style="padding:18px;">No open positions.</td></tr>
+      <tr><td colspan="8" class="muted" style="padding:18px;">No open positions.</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -77,7 +143,7 @@
   <div class="subtitle">Round-trips — bought then sold, with holding time and profit/loss.</div></div>
 <div class="panel">
   <table>
-    <thead><tr><th>Agent</th><th>Stock</th><th>Buy → Sell</th>
+    <thead><tr><th>Agent</th><th>Asset</th><th>Buy → Sell</th>
       <th>Held</th><th>P&amp;L</th><th>Why bought / why sold</th></tr></thead>
     <tbody>
     {% for r in trades.round_trips %}
@@ -85,10 +151,10 @@
         <td class="agentname">{{ r.name }}</td>
         <td class="mono">{{ r.symbol }} <span class="muted">×{{ r.qty|qty }}</span></td>
         <td class="mono">{{ r.buy_price|price }} → {{ r.sell_price|price }}</td>
-        <td class="mono">{{ r.hold }}</td>
+        <td class="mono" style="white-space:nowrap;">{{ r.hold }}</td>
         <td class="mono {{ 'up' if r.pnl_pct >= 0 else 'down' }}">{{ r.pnl_pct|pct }}
           <span class="muted">({{ r.pnl_amount|money2 }})</span></td>
-        <td style="font-size:12px;color:var(--ink-soft);max-width:320px;">
+        <td style="font-size:12px;color:var(--ink-soft);min-width:220px;max-width:320px;">
           <div>▸ {{ r.buy_reason or '—' }}</div>
           <div style="margin-top:3px;">◂ {{ r.sell_reason or '—' }}</div>
         </td>

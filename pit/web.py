@@ -38,6 +38,8 @@ def _conn():
 def _pct(value) -> str:
     if value is None:
         return "—"
+    if abs(value) < 0.005:      # avoid "-0.00%" for tiny negatives
+        return "0.00%"
     return f"{value:+.2f}%"
 
 
@@ -119,7 +121,9 @@ def round_view(round_id: int):
         abort(404)
     trade_stats = q.trade_analysis(conn, round_id)
     audit = q.audit_log(conn, round_id)
-    return render_template("round.html", trade_stats=trade_stats, audit=audit, **data)
+    race_svg = q.race_chart(q.race_series(conn, round_id))
+    return render_template("round.html", trade_stats=trade_stats, audit=audit,
+                           race_svg=race_svg, **data)
 
 
 @app.route("/lineage/<int:lineage_id>")

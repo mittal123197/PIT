@@ -32,6 +32,11 @@
     letter-spacing:-0.015em;text-wrap:balance;}
   .mono{font-family:'IBM Plex Mono',ui-monospace,monospace;
     font-variant-numeric:tabular-nums;}
+  /* wide tables scroll sideways inside their panel on narrow screens
+     instead of being cut off; tickers/numbers never break mid-token */
+  .panel:has(> table){overflow-x:auto;}
+  .panel table td.mono{white-space:nowrap;}
+  .racewrap{overflow-x:auto;} .racewrap svg{min-width:620px;}
   .up{color:var(--alpha);} .down{color:var(--liq);} .muted{color:var(--ink-soft);}
 
   /* ---- top bar ---- */

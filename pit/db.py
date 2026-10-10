@@ -60,6 +60,13 @@ _COLUMN_ADDITIONS = [
     ("round_results", "both_stopped_out", "INTEGER NOT NULL DEFAULT 0"),
     ("round_results", "passive_win", "INTEGER NOT NULL DEFAULT 0"),
     ("round_states", "cost_basis", "TEXT NOT NULL DEFAULT '{}'"),
+    # last marked price per held ticker, so the dashboard can show live
+    # value / P&L per position without hitting the market itself
+    ("round_states", "mark_prices", "TEXT NOT NULL DEFAULT '{}'"),
+    # live-session timing, for the dashboard's progress bar / next wake-up
+    ("rounds", "ends_at", "TEXT"),
+    ("rounds", "interval_s", "INTEGER"),
+    ("rounds", "last_tick_at", "TEXT"),
 ]
 
 

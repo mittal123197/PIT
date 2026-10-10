@@ -106,6 +106,15 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         brief_mod.prefetch_fundamentals(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
                                         verbose)
     end = time.time() + minutes * 60
+    conn.execute("UPDATE rounds SET ends_at=?, interval_s=? WHERE id=?",
+                 (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"),
+                  int(interval), rnd["id"]))
+    for r in conn.execute("SELECT agent_id, final_return_pct FROM round_states "
+                          "WHERE round_id=?", (rnd["id"],)).fetchall():
+        conn.execute("INSERT INTO round_marks (round_id, agent_id, ts, return_pct) "
+                     "VALUES (?,?,?,?)", (rnd["id"], r["agent_id"],
+                                          forward.local_ts(), r["final_return_pct"] or 0.0))
+    conn.commit()
     decision = 0
     decision_due = 0.0  # force a decision immediately
     while time.time() < end:
@@ -222,9 +231,14 @@ def _refresh_marks(conn, config, rnd, verbose):
                                    forward.local_ts(), reason=hit_reason)
                 total = st["current_capital"]
                 ret = (total / st["starting_capital"] - 1) * 100
-        conn.execute("UPDATE round_states SET final_return_pct=? "
+        held_now = json.loads(st["holdings"])
+        conn.execute("UPDATE round_states SET final_return_pct=?, mark_prices=? "
                      "WHERE round_id=? AND agent_id=?",
-                     (round(ret, 3), rnd["id"], st["agent_id"]))
+                     (round(ret, 3), json.dumps({t: price(t) for t in held_now}),
+                      rnd["id"], st["agent_id"]))
+        conn.execute("INSERT INTO round_marks (round_id, agent_id, ts, return_pct) "
+                     "VALUES (?,?,?,?)", (rnd["id"], st["agent_id"], forward.local_ts(),
+                                          round(ret, 3)))
         line.append(f"{forward._name(conn, st['agent_id'])} {ret:+.2f}%")
     conn.commit()
     if verbose:
@@ -261,6 +275,8 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
 
     returns = {aid: (value(st) / st["starting_capital"] - 1) * 100
                for aid, st in states.items()}
+    conn.execute("UPDATE rounds SET last_tick_at=? WHERE id=?", (ts, rnd["id"]))
+    conn.commit()
     if verbose:
         print(f"[tick {tick} · {ts}]", flush=True)
 

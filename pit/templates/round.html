@@ -59,6 +59,11 @@
   — ELO shifted {{ '%.1f'|format(result.rating_delta) }} points.
 </p>
 
+{% if race_svg %}
+<div class="eyebrow">The race</div>
+<div class="panel racewrap" style="padding:14px 10px 6px;">{{ race_svg|safe }}</div>
+{% endif %}
+
 <div class="eyebrow">What was learned</div>
 {% if rankings and rankings|length > 2 %}
   <div class="subtitle" style="margin:-4px 0 16px;">Every participant this round, ranked —
@@ -101,7 +106,7 @@
 <div class="eyebrow">Completed trades</div>
 <div class="panel">
   <table>
-    <thead><tr><th>Agent</th><th>Stock</th><th>Buy → Sell</th>
+    <thead><tr><th>Agent</th><th>Asset</th><th>Buy → Sell</th>
       <th>Held</th><th>P&amp;L</th><th>Why bought / why sold</th></tr></thead>
     <tbody>
     {% for r in trade_stats.round_trips %}
@@ -109,10 +114,10 @@
         <td class="agentname">{{ r.name }}</td>
         <td class="mono">{{ r.symbol }} <span class="muted">×{{ r.qty|qty }}</span></td>
         <td class="mono">{{ r.buy_price|price }} → {{ r.sell_price|price }}</td>
-        <td class="mono">{{ r.hold }}</td>
+        <td class="mono" style="white-space:nowrap;">{{ r.hold }}</td>
         <td class="mono {{ 'up' if r.pnl_pct >= 0 else 'down' }}">{{ r.pnl_pct|pct }}
           <span class="muted">({{ r.pnl_amount|money2 }})</span></td>
-        <td style="font-size:12px;color:var(--ink-soft);max-width:320px;">
+        <td style="font-size:12px;color:var(--ink-soft);min-width:220px;max-width:320px;">
           <div>▸ {{ r.buy_reason or '—' }}</div>
           <div style="margin-top:3px;">◂ {{ r.sell_reason or '—' }}</div>
         </td>
@@ -138,8 +143,8 @@
         <td class="mono">{{ p.symbol }}</td>
         <td class="mono">{{ p.qty|qty }}</td>
         <td class="mono">{{ p.avg_price|price }}</td>
-        <td class="mono">{{ p.held }}</td>
-        <td style="font-size:12.5px;color:var(--ink-soft);max-width:340px;">{{ p.reason or '—' }}</td>
+        <td class="mono" style="white-space:nowrap;">{{ p.held }}</td>
+        <td style="font-size:12.5px;color:var(--ink-soft);min-width:220px;max-width:340px;">{{ p.reason or '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>

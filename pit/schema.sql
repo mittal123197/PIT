@@ -226,3 +226,14 @@ CREATE TABLE IF NOT EXISTS live_days (
 CREATE INDEX IF NOT EXISTS idx_trades_round_agent ON trades(round_id, agent_id);
 CREATE INDEX IF NOT EXISTS idx_watches_round_active ON price_watches(round_id, active);
 CREATE INDEX IF NOT EXISTS idx_agents_lineage ON agents(lineage_id);
+
+-- Every mark-to-market sample of a live round (each agent's return over time)
+-- — the history behind the /live race chart.
+CREATE TABLE IF NOT EXISTS round_marks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id    INTEGER NOT NULL REFERENCES rounds(id),
+    agent_id    INTEGER NOT NULL REFERENCES agents(id),
+    ts          TEXT NOT NULL,          -- local wall clock, forward.local_ts()
+    return_pct  REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_round_marks_round ON round_marks(round_id, id);
