@@ -127,7 +127,7 @@ _CRYPTO_UNIVERSE: list[dict] = [
     {"symbol": s, "name": s.replace("-USD", ""), "sector": "Crypto"} for s in (
         "BTC-USD", "ETH-USD", "BNB-USD", "SOL-USD", "XRP-USD", "ADA-USD",
         "DOGE-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "LTC-USD", "BCH-USD",
-        "ATOM-USD", "XLM-USD", "ETC-USD", "FIL-USD", "APT-USD", "ARB-USD",
+        "ATOM-USD", "XLM-USD", "ETC-USD", "FIL-USD", "ARB-USD",
         "OP-USD", "NEAR-USD", "ICP-USD", "HBAR-USD", "VET-USD", "ALGO-USD",
         "AAVE-USD", "MKR-USD", "SAND-USD", "MANA-USD", "EOS-USD", "XTZ-USD",
         "TRX-USD", "SHIB-USD",
