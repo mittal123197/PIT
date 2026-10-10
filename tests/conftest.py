@@ -23,7 +23,12 @@ _TEST_DEFAULTS = {
     "PIT_RISK_REWARD_RATIO": "1.5",
     "PIT_POSITION_STOP_LOSS_PCT": "8.0",
     "PIT_START_ROUND_DAYS": "7",
-    "PIT_STAKE_EVOLUTION": "1",   # tests exercise the compounding mechanic itself
+    "PIT_STAKE_EVOLUTION": "1",
+    # a developer's live .env (crypto / top100) must not leak into tests, or live ticks
+    # try to build a real market brief over the network
+    "PIT_MARKET": "us",
+    "PIT_TRADE_UNIVERSE": "top500",
+    "PIT_BRIEF": "0",   # tests exercise the compounding mechanic itself
 }
 for _key, _val in _TEST_DEFAULTS.items():
     os.environ[_key] = _val
