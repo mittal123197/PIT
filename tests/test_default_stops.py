@@ -36,3 +36,15 @@ def test_custom_stop_triggers_at_its_own_distance():
     assert forward.check_position_stops(c, rid, aid, st, lambda t: 9.9, "t", cfg) == 0   # -1%
     assert forward.check_position_stops(c, rid, aid, st, lambda t: 9.79, "t", cfg) == 1  # -2.1%
     assert "BBB" not in json.loads(st["holdings"])
+
+
+def test_oversized_buys_are_scaled_pro_rata_not_first_come():
+    c, cfg, rid, aid, st = _setup()
+    st["current_capital"] = 1000.0
+    n = forward._execute(c, rid, aid, st, [
+        {"ticker": "AAA", "side": "buy", "amount_inr": 1000},
+        {"ticker": "BBB", "side": "buy", "amount_inr": 500},
+        {"ticker": "CCC", "side": "buy", "amount_inr": 500}], lambda t: 10.0, "t")
+    h = json.loads(st["holdings"])
+    assert n == 3 and set(h) == {"AAA", "BBB", "CCC"}
+    assert abs(h["AAA"] * 10 - 500) < 0.01 and abs(h["BBB"] * 10 - 250) < 0.01

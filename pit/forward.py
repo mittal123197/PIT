@@ -299,13 +299,25 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
     cost_basis = json.loads(st.get("cost_basis") or "{}")
     stop_pcts = json.loads(st.get("stop_pcts") or "{}")
     cash = st["current_capital"]
+    # Sells first (they free cash for this decision's buys), then buys. If the
+    # buys together ask for more than the cash on hand, scale every buy down
+    # pro rata — the agent's intended split survives. Executing in order used
+    # to let the first buy take everything and reject the rest (an agent that
+    # split $1,000 over three coins got one coin and two rejections).
+    orders = ([o for o in orders if o.get("side") == "sell"] +
+              [o for o in orders if o.get("side") == "buy"])
+    _scale = None
     for o in orders:
         px = price(o["ticker"])
         if not px or px <= 0:
             rejected.append(f"{o['side']} {o['ticker']}: no price available")
             continue
         if o["side"] == "buy":
-            budget = o.get("amount_inr") or (o.get("qty", 0) * px)
+            if _scale is None:      # first buy: cash now includes this decision's sells
+                wants = sum((b.get("amount_inr") or (b.get("qty", 0) * (price(b["ticker"]) or 0)))
+                            for b in orders if b.get("side") == "buy")
+                _scale = min(1.0, cash / wants) if wants > 0 else 1.0
+            budget = (o.get("amount_inr") or (o.get("qty", 0) * px)) * _scale
             # Fractional shares: at a $1,000-scale stake, whole-share sizing
             # silently dropped every order for a stock priced above the
             # agent's budget (e.g. LITE at $1,114 vs a $560 budget -> 0
