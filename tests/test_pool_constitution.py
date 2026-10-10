@@ -68,12 +68,20 @@ def test_supported_rule_needs_pool_majority_and_is_proven(monkeypatch):
     assert g.active_texts(c)[0].startswith("DO: buy when RSI14 < 30  [proven;")
 
 
-def test_untested_rule_needs_everyone_and_enters_on_probation(monkeypatch):
+def test_rule_nobody_ever_traded_is_vetoed(monkeypatch):
     c = _conn()                                                     # empty ledger
+    asked = []
+    monkeypatch.setattr(g, "_ask_json", _fake({"RONIN": RSI_DO}, {}, asked))
+    res = g.pool_constitution(c, ArenaConfig(), None)
+    assert res[0]["resolution"] == "vetoed" and asked == []
+
+
+def test_untested_rule_needs_everyone_and_enters_on_probation(monkeypatch):
+    c = _conn(); _ledger(c, 1.0, -1.0, n=3)                        # 3 matching < 5 -> untested
     monkeypatch.setattr(g, "_ask_json", _fake(
         {"RONIN": RSI_DO}, {("LYNX", "RSI14"): {"vote": "agree"}}, []))
     assert not g.pool_constitution(c, ArenaConfig(), None)[0]["accepted"]   # 2/3 not enough
-    c2 = _conn()
+    c2 = _conn(); _ledger(c2, 1.0, -1.0, n=3)
     monkeypatch.setattr(g, "_ask_json", _fake(
         {"RONIN": RSI_DO}, {("LYNX", "RSI14"): {"vote": "agree"},
                             ("VIPER", "RSI14"): {"vote": "agree"}}, []))
@@ -90,7 +98,8 @@ def test_free_text_and_unknown_fields_are_not_rules(monkeypatch):
 
 
 def test_review_retires_a_rule_the_ledger_turns_against(monkeypatch):
-    c = _conn()
+    c = _conn(); _ledger(c, 1.0, -1.0, n=2)
+    c.execute("UPDATE rounds SET status='resolved'")
     monkeypatch.setattr(g, "_ask_json", _fake(
         {"RONIN": RSI_DO}, {("LYNX", "RSI14"): {"vote": "agree"},
                             ("VIPER", "RSI14"): {"vote": "agree"}}, []))

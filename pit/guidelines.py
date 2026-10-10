@@ -479,6 +479,12 @@ def _min_trades() -> int:
 _T_SUPPORT = 1.0   # |t| at which the ledger counts as taking a side
 
 
+def _min_probation() -> int:
+    """Matching buys needed before an untested rule may even go to a vote."""
+    import os
+    return int(os.getenv("PIT_RULE_MIN_PROBATION", "2"))
+
+
 def _rule_fields() -> dict:
     from .brief import RULE_FIELDS
     return RULE_FIELDS
@@ -774,6 +780,13 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
         if (p["kind"] == "add" and verdict == "contradicted") or \
            (p["kind"] == "remove" and verdict == "supported"):
             r["note"] = "vetoed by the ledger: " + evidence_label(ledger)
+            continue
+        # No logged buy has ever matched the condition: there is no evidence
+        # at all, and an AVOID rule adopted now could never be tested later
+        # (agents obeying it never produce a matching buy). Not adoptable.
+        if p["kind"] == "add" and ledger and ledger["n_match"] < _min_probation():
+            r["note"] = (f"vetoed: no evidence — {ledger['n_match']} logged buys match "
+                         f"this condition (need {_min_probation()})")
             continue
         texts = active_texts(conn)
 
