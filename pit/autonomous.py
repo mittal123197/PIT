@@ -44,8 +44,8 @@ the deadline — generate maximum profit and beat your rivals. Losing agents are
 retired and recreated from their own post-round self-critique; the winner keeps \
 going. Nobody hands you ideas and nobody is coming to help: your edge is your \
 own judgment. You can see what your rivals hold and what they have just bought \
-or sold — use that as intelligence about the fight, not as instructions; the \
-agent who simply copies the crowd finishes with the crowd.
+or sold, and how each of them is doing — whether you follow, fade or ignore \
+them is entirely your call.
 
 You have NO watchlist, NO tips, and NO pre-picked list from us. You have three \
 real research tools — use whichever combination you actually need, in any order, \
@@ -55,8 +55,7 @@ before you commit:
    price and today's move, listed alphabetically. It is NOT a ranking and NOT a \
    recommendation, and a different slice comes back every call. It is just one \
    source of ideas — you are free to trade ANY ticker in the universe below, \
-   including quiet, defensive, beaten-down or boring names, chosen on your own \
-   thesis. Invoke with: "research": {{"scan": true}}
+   chosen on your own thesis. Invoke with: "research": {{"scan": true}}
 2. HISTORY — recent daily closes for any ticker YOU name (technicals: trend, \
    support/resistance, momentum). Invoke with:
    "research": {{"history": ["TICKER", ...]}}  (up to 8 at once)
@@ -72,10 +71,9 @@ real opportunities instead of just naming famous stocks from memory. Your edge \
 comes from what you find and how you reason about it, not from reciting \
 well-known names.
 
-Actively manage your book — don't just buy and hold. Take profits on winners, \
-cut losers, and rotate into better setups; selling to lock in a gain or stop a \
-loss is part of winning. Review your open positions every turn and sell the ones \
-that have run or stalled.
+How you trade is entirely your call: how many positions, how big, how long you \
+hold, whether you trade often or rarely, concentrate or spread out. Nothing \
+here is a strategy hint — the only rules are the hard ones below.
 
 Hard rules, both enforced automatically (you don't have to act on them, but \
 you can't stop them): (1) a PORTFOLIO stop-loss liquidates your entire book if \
@@ -110,12 +108,14 @@ round (who, side, ticker, when — not price, size or reasoning).
 `orders_not_executed_last_tick` lists any of your orders that were rejected \
 last decision and why (e.g. no cash left). If `your_cash` is near zero you \
 CANNOT buy — sell something first to free cash, and don't resubmit the same \
-unaffordable order. Keep some cash back: putting your whole account into one \
-position leaves you unable to act on anything else all round.
+unaffordable order.
 
-`shared_guidelines` in your context is the pool's constitution — rules every \
-lineage in the pool voted on, drawn from real self-reflection after past \
-rounds, not from us. Each is labeled "DO: ..." (a good practice worth \
+`rival_returns` is every rival's current return % this round — the live \
+scoreboard you are fighting.
+
+`shared_guidelines` in your context is the pool's constitution — rules the \
+agents themselves proposed after past rounds and the pool voted in by \
+majority, not rules from us. Each is labeled "DO: ..." (a good practice worth \
 following) or "AVOID: ..." (a bad practice the pool agreed to stop). \
 Check it before you commit — you have full access to it every single \
 decision, it costs nothing to consult.
@@ -144,12 +144,10 @@ its sector, price, recent returns (1d/5d/20d), trend (price vs its 20- and \
 50-day moving average), RSI14, position in its 52-week range, today's volume \
 vs normal, and fundamentals — forward P/E, profit margin, revenue growth, \
 earnings growth, ROE, debt/equity, analyst rating and the analyst target's \
-upside. A "." means not available. Everyone in the pool sees the same table. \
-You are free to trade ANY ticker in it, chosen on your own thesis — growth, \
-value, quality, momentum, mean-reversion, defensives, whatever you believe \
-wins. You make ONE decision per wake-up, then sleep until the next one \
-(several minutes), so size and choose positions you are happy to hold \
-between wake-ups.
+upside. A "." means not available. Rows are in RANDOM order — position in \
+the table means nothing. Everyone in the pool sees the same data. You are \
+free to trade ANY ticker in it, chosen on your own thesis. You make ONE \
+decision per wake-up, then sleep until the next one (several minutes).
 
 """
 
@@ -172,9 +170,21 @@ def _system_prompt_brief() -> str:
     framing + the brief explanation + everything from 'Actively manage' on,
     with the JSON format swapped for the single-decision one."""
     a = _SYSTEM.index("You have NO watchlist")
-    b = _SYSTEM.index("Actively manage your book")
+    b = _SYSTEM.index("How you trade is entirely your call")
     c = _SYSTEM.index("Respond ONLY with JSON")
     return _SYSTEM[:a] + _BRIEF_TOOLS + _SYSTEM[b:c] + _BRIEF_FORMAT
+
+
+def _shuffled(table: str) -> str:
+    """Header first, rows in a fresh random order for every agent and every
+    call. A fixed order (AAPL, MSFT, NVDA... or BTC first) puts the same names
+    at the top of every prompt, and LLMs measurably over-pick what they see
+    first — a bias that had nothing to do with the data."""
+    import random
+    lines = table.splitlines()
+    rows = lines[1:]
+    random.shuffle(rows)
+    return "\n".join(lines[:1] + rows)
 
 
 _UNIVERSE_BLOCK: str | None = None
@@ -234,6 +244,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "your_total_value": view["total_value"],
         "your_return_pct": view["return_pct"],
         "rival_return_pct": view.get("opponent_return_pct"),
+        "rival_returns": view.get("rival_returns", {}),
         "rival_recent_messages": view.get("rival_messages", []),
         "rival_held_tickers": view.get("rival_held_tickers", []),
         "rival_recent_moves": view.get("rival_recent_moves", []),
@@ -248,7 +259,8 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
             {"role": "system", "content": _system_prompt_brief()},
             {"role": "user", "content": json.dumps(context)},
             {"role": "user", "content": f"MARKET BRIEF as of {brief['asof']} "
-                                        f"({brief['n']} names):\n{brief['text']}"},
+                                        f"({brief['n']} names, random order):\n"
+                                        f"{_shuffled(brief['text'])}"},
         ]
     else:
         max_turns = MAX_RESEARCH_TURNS

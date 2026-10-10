@@ -313,3 +313,243 @@ def _llm_vote(lin, proposal):
         return llm_vote_guideline(cfg, proposal)
     except Exception:
         return _heuristic_vote(lin, proposal)
+
+
+# ---- the agent-driven constitution ---------------------------------------
+#
+# The pool writes its own rulebook. After a round, EACH agent — using its own
+# model and its own experience — may propose one change: a DO (good practice),
+# an AVOID (bad practice), or retiring an existing rule its experience
+# contradicts. Every agent then votes on every proposal, again with its own
+# model and its own notes. A proposal passes only with a strict majority of
+# the whole pool (abstentions don't help it). Replaces two biases of the older
+# path: a single neutral "summarizer" model deciding what the pool learned,
+# and a fallback vote rule that made winners reflexively reject new rules.
+
+ARENA_FACTS = ("Arena facts: long-only paper trading (no leverage, no shorting, "
+               "no options); fractional quantities allowed; portfolio and "
+               "per-position stop-losses fire automatically; each agent decides "
+               "once per wake-up (every few minutes) from a shared data table of "
+               "price, returns, moving-average trend, RSI14, 52-week position, "
+               "volume and fundamentals; the pool is ranked by return at the deadline.")
+
+
+def _universe_symbols() -> set[str]:
+    try:
+        from . import full_market
+        from .market import TRADE_UNIVERSE_MODE
+        syms = {r["symbol"].upper() for r in full_market.universe_for(TRADE_UNIVERSE_MODE)}
+    except Exception:
+        syms = set()
+    return syms | {x.split("-")[0] for x in syms if x.endswith("-USD")}
+
+
+def _names_a_ticker(text: str, symbols: set[str]) -> bool:
+    """A shared rule must apply to ANY name. Rules that name a specific
+    ticker ('Monitor AAVE-USD…') are just one agent's trade idea broadcast to
+    the whole pool — they'd herd everyone into the same names. Only ALL-CAPS
+    tokens count, so ordinary words ('now', 'all', 'on') don't false-match."""
+    import re
+    for tok in re.findall(r"\b[A-Z][A-Z0-9.\-]{1,9}\b", text):
+        if tok in symbols or tok.endswith("-USD"):
+            return True
+    return False
+
+
+def _normalise_rule(text: str, practice: str) -> tuple[str, str]:
+    """'DO: Avoid X' / 'Never X' / "Don't X" -> practice='bad', text='X'.
+    One idea per rule: anything after a ';' is dropped (the model tends to
+    staple a DO onto an AVOID, which makes the label wrong for half of it)."""
+    t = text.strip().split(";")[0].strip()
+    for pre in ("DO:", "Do:", "AVOID:", "Avoid:"):
+        if t.startswith(pre):
+            practice = "bad" if pre.lower().startswith("avoid") else practice
+            t = t[len(pre):].strip()
+    low = t.lower()
+    for verb in ("avoid ", "don't ", "do not ", "never "):
+        if low.startswith(verb):
+            return t[len(verb):].strip().rstrip("."), "bad"
+    return t.rstrip("."), practice
+
+
+def _lineage_cfg(lin: dict) -> dict:
+    try:
+        return json.loads(lin["strategy_config"] or "{}")
+    except Exception:
+        return {}
+
+
+def _norm(text: str) -> str:
+    return " ".join(text.lower().replace(".", " ").split())
+
+
+def _ask_json(model: str | None, system: str, payload: dict) -> dict | None:
+    from .llm import DEFAULT_MODEL, llm_chat
+    try:
+        out = llm_chat(model or DEFAULT_MODEL,
+                       [{"role": "system", "content": system},
+                        {"role": "user", "content": json.dumps(payload)}],
+                       temperature=0.5, json_mode=True)
+        data = json.loads(out)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _round_trades(conn, round_id, lineage_id) -> list[dict]:
+    if round_id is None:
+        return []
+    return [dict(r) for r in conn.execute(
+        """SELECT t.side, t.symbol, round(t.price, 6) AS price, t.reason
+           FROM trades t JOIN agents a ON a.id=t.agent_id
+           WHERE t.round_id=? AND a.lineage_id=? ORDER BY t.id LIMIT 30""",
+        (round_id, lineage_id))]
+
+
+def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = None,
+                   symbols: set[str] | None = None) -> dict | None:
+    cfg = _lineage_cfg(lin)
+    data = _ask_json(cfg.get("model"),
+        "You are a trading agent helping write your pool's shared rulebook. JSON only.",
+        {"you": lin["name"], "your_record": f"{lin['wins']}W-{lin['losses']}L",
+         "your_notes_from_your_own_trades": cfg.get("notes", ""),
+         "your_trades_last_round": trades or [],
+         "arena": ARENA_FACTS,
+         "current_rules": [{"id": g["id"],
+                            "rule": f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}"}
+                           for g in active],
+         "instruction": (
+             "Based ONLY on your own experience, propose at most ONE change to the "
+             "rulebook every agent in the pool will see: a good practice to DO, a "
+             "bad practice to AVOID, or removing a current rule your experience "
+             "contradicts. A rule must be GENERAL — it must apply to any stock or "
+             "coin, so NEVER name a ticker, coin or company. It must be concrete "
+             "and actionable (e.g. a condition in the data table and what to do "
+             "about it), ONE idea in one sentence, possible in this arena (see arena facts), and not repeat "
+             "a current rule. Generic advice ('trade carefully') is useless. Most "
+             "rounds deserve no new rule — if nothing is clearly worth it, say "
+             "none. Return JSON "
+             "{\"kind\":\"add\"|\"remove\"|\"none\",\"practice\":\"good\"|\"bad\","
+             "\"text\":\"the rule, <=160 chars\",\"remove_id\":N,\"why\":\"...\"}")})
+    if not data or data.get("kind") not in ("add", "remove"):
+        return None
+    if data["kind"] == "remove":
+        ids = {g["id"]: g for g in active}
+        try:
+            gid = int(data.get("remove_id"))
+        except (TypeError, ValueError):
+            return None
+        if gid not in ids:
+            return None
+        g = ids[gid]
+        return {"kind": "remove", "practice": g["practice"], "text": g["text"],
+                "guideline_id": gid, "proposer": lin["name"],
+                "evidence": str(data.get("why", ""))[:300]}
+    text, practice = _normalise_rule(str(data.get("text", "")),
+                                     "bad" if data.get("practice") == "bad" else "good")
+    if len(text) < 12 or _names_a_ticker(text, symbols or set()):
+        return None
+    return {"kind": "add", "practice": practice,
+            "text": text[:200], "guideline_id": None, "proposer": lin["name"],
+            "evidence": str(data.get("why", ""))[:300]}
+
+
+def _agent_vote(lin: dict, proposal: dict, active: list[str],
+                trades: list[dict] | None = None) -> tuple[str, str]:
+    cfg = _lineage_cfg(lin)
+    label = "DO" if proposal.get("practice") == "good" else "AVOID"
+    data = _ask_json(cfg.get("model"),
+        "You are a trading agent voting on your pool's shared rulebook. JSON only.",
+        {"you": lin["name"], "your_record": f"{lin['wins']}W-{lin['losses']}L",
+         "your_notes_from_your_own_trades": cfg.get("notes", ""),
+         "your_trades_last_round": trades or [],
+         "arena": ARENA_FACTS,
+         "current_rules": active,
+         "proposal": (f"{proposal['kind'].upper()} rule — {label}: {proposal['text']}"),
+         "instruction": (
+             "This rule would bind every agent, including you, from now on — a bad "
+             "rule costs everyone. Be a skeptic: most proposals should be "
+             "rejected. Agree ONLY if you can point to something specific in your "
+             "own trades where following it would have improved your result. "
+             "Disagree if it is vague, obvious, already covered, impossible in this "
+             "arena, or not supported by your own experience. Return JSON "
+             "{\"evidence_from_my_trades\":\"...\",\"vote\":\"agree\"|\"disagree\","
+             "\"reason\":\"<=200 chars\"}")})
+    if not data or data.get("vote") not in ("agree", "disagree"):
+        return "abstain", "no valid vote returned"
+    ev = str(data.get("evidence_from_my_trades", "")).strip()
+    if data["vote"] == "agree" and len(ev) < 15:
+        return "disagree", "agreed without citing own evidence — counted as no"
+    return data["vote"], (str(data.get("reason", "")) + (f" | evidence: {ev}" if ev else ""))[:300]
+
+
+def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) -> list[dict]:
+    """Every agent may propose one rule change; every agent votes on each.
+    Returns one summary dict per proposal voted on (possibly empty)."""
+    from concurrent.futures import ThreadPoolExecutor
+    lineages = current_lineages(conn)
+    if not lineages:
+        return []
+    active = active_guidelines(conn)
+    symbols = _universe_symbols()
+    trades = {l["id"]: _round_trades(conn, source_round_id, l["id"]) for l in lineages}
+    with ThreadPoolExecutor(max_workers=len(lineages)) as ex:
+        raw = list(ex.map(lambda l: _agent_propose(l, active, trades[l["id"]], symbols),
+                          lineages))
+
+    seen = {_norm(g["text"]) for g in active}
+    proposals = []
+    for p in raw:
+        if not p:
+            continue
+        key = ("rm", p["guideline_id"]) if p["kind"] == "remove" else _norm(p["text"])
+        if p["kind"] == "add" and key in seen:
+            continue
+        if key in {(("rm", q["guideline_id"]) if q["kind"] == "remove" else _norm(q["text"]))
+                   for q in proposals}:
+            continue
+        proposals.append(p)
+
+    results = []
+    for p in proposals[:config.max_proposals_per_round]:
+        n_active = len(active_guidelines(conn))
+        if p["kind"] == "add" and n_active >= config.max_active_guidelines:
+            continue   # rulebook full — only removals can make room
+        pid = conn.execute(
+            """INSERT INTO guideline_proposals
+               (kind, practice, guideline_id, proposed_text, source_round_id, created_at)
+               VALUES (?,?,?,?,?,?)""",
+            (p["kind"], p["practice"], p.get("guideline_id"), p["text"],
+             source_round_id, _now())).lastrowid
+        conn.commit()
+        texts = active_texts(conn)
+        # the proposer votes for its own proposal (no need to ask it); the
+        # others are asked — so a rule needs at least one OTHER agent's support
+        def _v(l):
+            if l["name"] == p["proposer"]:
+                return "agree", "proposer"
+            return _agent_vote(l, p, texts, trades[l["id"]])
+        with ThreadPoolExecutor(max_workers=len(lineages)) as ex:
+            votes = list(ex.map(_v, lineages))
+        for lin, (vote, reason) in zip(lineages, votes):
+            if vote == "abstain":
+                continue
+            conn.execute(
+                """INSERT OR REPLACE INTO guideline_votes
+                   (proposal_id, lineage_id, vote, reasoning, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (pid, lin["id"], vote, reason, _now()))
+        agree = sum(1 for v, _ in votes if v == "agree")
+        # strict majority of the WHOLE pool — two abstentions can't let one
+        # agent's vote write a rule for everyone
+        accepted = agree * 2 > len(lineages)
+        if accepted:
+            _apply(conn, p)
+        conn.execute("UPDATE guideline_proposals SET resolution=?, resolved_at=? WHERE id=?",
+                     ("accepted" if accepted else "rejected", _now(), pid))
+        conn.commit()
+        results.append({"proposal_id": pid, "kind": p["kind"], "practice": p["practice"],
+                        "text": p["text"], "proposer": p["proposer"],
+                        "evidence": p.get("evidence", ""), "agree": agree,
+                        "total": len(lineages), "accepted": accepted})
+    return results

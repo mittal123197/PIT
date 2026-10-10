@@ -28,7 +28,12 @@ _TEST_DEFAULTS = {
     # try to build a real market brief over the network
     "PIT_MARKET": "us",
     "PIT_TRADE_UNIVERSE": "top500",
-    "PIT_BRIEF": "0",   # tests exercise the compounding mechanic itself
+    "PIT_BRIEF": "0",
+    "PIT_REFLECTION_INTERVAL": "5",
+    # code-default agent models (a live .env may point them at Ollama)
+    "PIT_RONIN_MODEL": "deepseek:deepseek-v4-flash",
+    "PIT_VIPER_MODEL": "deepseek:deepseek-v4-flash",
+    "PIT_LYNX_MODEL": "deepseek:deepseek-v4-flash",   # tests were written against the old cadence   # tests exercise the compounding mechanic itself
 }
 for _key, _val in _TEST_DEFAULTS.items():
     os.environ[_key] = _val

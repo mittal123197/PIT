@@ -222,6 +222,8 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
             "notes": cfg.get("notes", ""),
             "rival_held_tickers": _held_by_rivals(holdings_snapshot, aid),
             "rival_recent_moves": _rival_recent_moves(conn, rnd["id"], aid),
+            "rival_returns": {_name(conn, a): round(r, 2)
+                              for a, r in returns.items() if a != aid},
         }
         view["rival_messages"] = _recent_messages(conn, rnd["id"], aid)
         orders, notes, message, trace = autonomous.decide(
@@ -597,13 +599,19 @@ def _resolve(conn, rnd, config, price) -> dict:
     # Everyone stopping out ALWAYS forces this pass early, regardless of the
     # interval — the whole pool just failed together in the same conditions,
     # which is exactly the kind of shared signal worth discussing immediately.
-    reflection = None
+    reflection, reflections = None, []
     if all_stopped_out or (config.reflection_enabled
             and rnd["round_number"] % config.reflection_interval == 0):
         from . import guidelines as gmod
         from .llm import groq_available
-        reflection = gmod.open_and_resolve(conn, config, rnd["id"],
-                                           use_llm=groq_available())
+        if groq_available():
+            # the agents propose and vote on rules themselves, each with its
+            # own model and its own experience (guidelines.pool_constitution)
+            reflections = gmod.pool_constitution(conn, config, rnd["id"])
+            reflection = reflections[0] if reflections else None
+        else:   # offline: deterministic stats heuristic
+            reflection = gmod.open_and_resolve(conn, config, rnd["id"], use_llm=False)
+            reflections = [reflection] if reflection else []
 
     conn.execute("UPDATE rounds SET status='resolved', deadline=? WHERE id=?",
                  (_today(), rnd["id"]))
@@ -616,7 +624,7 @@ def _resolve(conn, rnd, config, price) -> dict:
             "ranking": [{"agent_id": aid, "name": _name(conn, aid),
                         "rank": i + 1, "return_pct": round(summaries[aid].return_pct, 2),
                         "note": notes[aid]} for i, aid in enumerate(ranking)],
-            "reflection": reflection}
+            "reflection": reflection, "reflections": reflections}
 
 
 def _apply_lineage(conn, lid, ret, won, mult, flat_stake=None):
@@ -665,7 +673,8 @@ def _reflect_winner(conn, round_id, wa, return_pct) -> str:
     sharpens the current one."""
     trades = _own_trades(conn, round_id, wa["id"])
     cfg = json.loads(wa["strategy_config"])
-    note = _self_reflection(cfg.get("notes", ""), trades, return_pct, won=True)
+    note = _self_reflection(cfg.get("notes", ""), trades, return_pct, won=True,
+                           model=cfg.get("model"))
     cfg["notes"] = note
     conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                  (json.dumps(cfg), wa["id"]))
@@ -680,7 +689,8 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
     itself, not from copying whoever beat it."""
     trades = _own_trades(conn, round_id, la["id"])
     old_cfg = json.loads(la["strategy_config"])
-    note = _self_reflection(old_cfg.get("notes", ""), trades, return_pct, won=False)
+    note = _self_reflection(old_cfg.get("notes", ""), trades, return_pct, won=False,
+                           model=old_cfg.get("model"))
     # Preserve the model across generations — this was dropped for a long
     # time, silently falling back to decide()'s `model or DEFAULT_MODEL`
     # (Groq) for every agent that had ever lost even once, regardless of
@@ -715,7 +725,8 @@ def _share_lesson(conn, round_id, agent_id, note) -> None:
          f"\U0001f4dd Lesson from this round: {note}"))
 
 
-def _self_reflection(old_notes, own_trades, return_pct, won: bool) -> str:
+def _self_reflection(old_notes, own_trades, return_pct, won: bool,
+                     model: str | None = None) -> str:
     """Learn from one's OWN trades (LLM if available, else a plain summary).
     Never looks at the opponent's trades — this is self-critique/reinforcement,
     not copying whoever won."""
@@ -731,34 +742,33 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool) -> str:
                     "decision call before assuming this is a real strategy.")
         return "Made zero trades and still lost — likely a decision/data failure, not a strategy choice."
     try:
-        from .llm import DEFAULT_MODEL, _client, _extra_for, groq_available
+        from .llm import DEFAULT_MODEL, groq_available, llm_chat
         if groq_available():
             import json as _j
-            if won:
-                instruction = (
-                    f"You WON this round at {return_pct:+.2f}%. Study your OWN "
-                    "trades below and identify what specifically worked (entry "
-                    "timing, ticker selection, fundamentals check, exit "
-                    "discipline). Write concise reinforcement notes so you keep "
-                    "doing this. <=400 chars. Return JSON {\"notes\":\"...\"}.")
-            else:
-                instruction = (
-                    f"You LOST this round at {return_pct:+.2f}%. Study your OWN "
-                    "trades below and identify your own mistakes (bad entries, "
-                    "poor timing, ignoring risk, chasing hype, wrong sizing). "
-                    "Write concise corrective notes for next time — self-critique "
-                    "only, do not reference any other trader. <=400 chars. "
-                    "Return JSON {\"notes\":\"...\"}.")
+            # The agent reflects with its OWN brain (its own model), and the
+            # question is open-ended. The old prompt handed every agent the
+            # same checklist ("entry timing, ticker selection, exit discipline"
+            # / "bad entries, chasing hype, wrong sizing"), so every critique
+            # came back in the same words regardless of what actually happened
+            # — a lens we imposed, not a lesson the agent drew.
+            outcome = "won" if won else "did not win"
+            instruction = (
+                f"The round is over: you {outcome} at {return_pct:+.2f}%. Look "
+                "at your OWN trades below and your notes from before. In your "
+                "own words: what does this round actually tell you about how you "
+                "should trade next time — what to keep doing and what to change? "
+                "Be specific to these trades and this market, not generic advice. "
+                "Self-critique only, don't reference other traders. <=400 chars. "
+                "Return JSON {\"notes\":\"...\"}.")
             prompt = {"your_own_trades": own_trades[:40],
                       "your_old_notes": old_notes, "instruction": instruction}
-            r = _client().chat.completions.create(
-                model=DEFAULT_MODEL, response_format={"type": "json_object"},
-                messages=[{"role": "system",
-                          "content": "You are a trader reflecting on your own "
-                                     "performance. JSON only."},
-                          {"role": "user", "content": _j.dumps(prompt)}],
-                temperature=0.8, **_extra_for(DEFAULT_MODEL))
-            return "LLM: " + str(_j.loads(r.choices[0].message.content).get("notes", ""))[:380]
+            content = llm_chat(model or DEFAULT_MODEL,
+                               [{"role": "system",
+                                 "content": "You are a trader reflecting on your "
+                                            "own performance. JSON only."},
+                                {"role": "user", "content": _j.dumps(prompt)}],
+                               temperature=0.7, json_mode=True)
+            return "LLM: " + str(_j.loads(content).get("notes", ""))[:380]
     except Exception:
         pass
     syms = ", ".join(sorted({t["symbol"] for t in own_trades})[:6]) or "nothing"

@@ -172,7 +172,12 @@ class ArenaConfig:
     # if a pattern recurs — "worked once" doesn't qualify. Every lineage then
     # votes; a strict majority is required (ties keep the status quo).
     reflection_enabled: bool = os.getenv("PIT_REFLECTION", "1") not in ("0", "false", "False")
-    reflection_interval: int = _env_int("PIT_REFLECTION_INTERVAL", 5)
+    # Every round by default: the agents propose/vote after each round (see
+    # guidelines.pool_constitution) — with only a few rounds a day, "every 5"
+    # meant the rulebook essentially never formed.
+    reflection_interval: int = _env_int("PIT_REFLECTION_INTERVAL", 1)
+    max_proposals_per_round: int = _env_int("PIT_MAX_PROPOSALS_PER_ROUND", 3)
+    max_active_guidelines: int = _env_int("PIT_MAX_ACTIVE_GUIDELINES", 12)
     reflection_min_sample: int = _env_int("PIT_REFLECTION_MIN_SAMPLE", 3)
     reflection_pattern_frac: float = _env_float("PIT_REFLECTION_PATTERN_FRAC", 0.6)
 

@@ -3,29 +3,40 @@
 *Named after the trading pit — the open-outcry floor at an exchange, not an
 acronym.*
 
-A pool of fully **autonomous** LLM trading agents — no stock pool, no preset
-strategy, no hand-picked watchlist. Each agent is just an LLM given paper
-capital and a goal; it researches the real US market itself (a genuine random
-sample of the whole listed market, or a quality-filtered S&P 500 slice — see
-below) and trades real, live (or historical-replay) prices. Every agent in
-the pool trades the same round, at the same time.
+A pool of fully **autonomous** LLM trading agents — no preset strategy, no
+watchlist, no strategy hints. Each agent is given paper capital, a universe
+(about 100 large US stocks, or about 30 liquid crypto coins), and the same data as
+its rivals, and picks whatever it wants on its own thesis. Every agent in the
+pool trades the same round, at the same time, and the losers are recreated
+from their own self-critique.
 
-- **Scoreboard visible, playbook hidden** — each agent sees every rival's live
-  return % every decision, but never their trade rationale, size, or entry
-  price. Communication happens only through explicit trash talk and
-  self-reflection "lessons" they choose to share.
+- **One decision per wake-up, from one shared data table.** Each wake-up
+  (every few minutes) the arena builds a single table for the whole universe —
+  price, 1d/5d/20d returns, trend vs the 20- and 50-day average, RSI14,
+  52-week position, volume vs normal, and fundamentals (forward P/E, margin,
+  growth, ROE, debt/equity, analyst rating and target upside). Every agent
+  gets the identical data, rows in a fresh random order (so nothing is
+  favoured for sitting at the top), and makes one LLM call. Then it sleeps
+  until the next wake-up while prices are marked every few seconds.
+- **No strategy hints.** The prompt states the battle (maximise return, ranked
+  at the deadline, losers recreated) and the hard rules — nothing about how to
+  trade: no "take profits", no "keep cash back", no "avoid the crowd". Position
+  size, holding time and trading frequency are each agent's own call.
+- **Rivals in plain view (except their playbook).** Each agent sees every
+  rival's live return, which tickers they hold, and their latest buys and
+  sells — never price, size or reasoning. Plus their trash talk and shared
+  lessons.
 - **No duplicate holdings.** Each agent can see which tickers any rival
   currently holds (symbols only, this round) and a BUY on one of those is
   rejected server-side, no exceptions — an idea has to be your own, not a
   rival's already-open position. The check uses a snapshot from the start of
   the decision cycle, so it can't create a same-tick race where whoever gets
   processed first claims a stock first.
-- **Full-market discovery, not memory.** An LLM asked to "pick a stock" from
-  its own training data reliably reaches for the same 10 famous names.
-  `full_market.py` instead gives it a real ticker universe to scan — either
-  every NASDAQ/NYSE/AMEX common stock (~5,400) or the S&P 500 (default,
-  `PIT_TRADE_UNIVERSE=top500`) — and ranks genuine price movement over a
-  random sample, fresh, every call.
+- **Universes.** `PIT_TRADE_UNIVERSE=top100` (a curated list of about 100 large,
+  liquid US names; curated, not a live market-cap ranking) or `crypto` (about 30
+  liquid coins) use the shared data table. `top500` / `full` (S&P 500 / every
+  US listing) fall back to a research loop with a neutral, unranked random
+  sample — too many names for one table.
 - **Two hard risk constraints, enforced by the arena, not the agent.** A
   **portfolio-level** stop-loss/take-profit scales by √round-length (a 5-day
   round isn't held to the same band as a 14-day one) and force-liquidates the
@@ -33,17 +44,18 @@ the pool trades the same round, at the same time.
   collapsing holding on its own, before the aggregate book has to fall that
   far. Every open position is force-closed for real at the round's deadline,
   so a final result is always realized, never a paper mark.
-- **Self-reflection.** Every agent studies its own trades. The round's best
-  performer reinforces what worked, in place. Everyone else is a loser and
-  self-critiques its own mistakes into a new, self-seeded generation.
-- **A shared "constitution," grown from real experience.** Agents post their
-  self-reflection as a message the rest of the pool can read (📝 lessons,
-  alongside trash talk). Every few rounds, a reflection pass looks for a
-  lesson that shows up independently across multiple lineages — not a
-  one-off — and proposes it as a **DO** (good practice) or **AVOID** (bad
-  practice) guideline. Every lineage gets one vote; a strict majority adopts
-  it (a tie keeps the status quo). Adopted guidelines are injected into every
-  agent's context, every decision, from then on.
+- **Self-reflection, in the agent's own words.** After each round every agent
+  reviews its own trades with its own model and an open question (what to keep
+  doing, what to change) — no imposed checklist. The winner reinforces in
+  place; everyone else becomes a new, self-seeded generation.
+- **A rulebook the agents write themselves.** After every round each agent
+  may propose one change to the shared rulebook — a **DO**, an **AVOID**, or
+  retiring an existing rule — grounded in its own trades. Every other agent
+  votes with its own model, and is told to be skeptical: an "agree" that
+  cites no evidence from its own trades counts as no. A rule needs a strict
+  majority of the whole pool. Rules must be general: anything naming a
+  specific ticker is rejected (it would just herd everyone into one agent's
+  pick). Adopted rules go into every agent's context from then on.
 - **Flat stakes by default; rank and ELO are the scoreboard.** Every agent
   starts every round with the same capital. (With `PIT_STAKE_EVOLUTION=1`
   stakes compound instead: 1st place +25%, plus an extra +5% pulled from the

@@ -185,13 +185,13 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
                 verb = "self-critiques" if outcome.get("both_stopped_out") else "reinforces"
                 print(f"  {outcome['winner']} {verb}: {outcome.get('winner_note', '')}")
                 print(f"  {outcome['loser']} self-critiques: {outcome['mutation_note']}")
-            if outcome.get("reflection"):
-                r = outcome["reflection"]
+            for r in (outcome.get("reflections")
+                      or ([outcome["reflection"]] if outcome.get("reflection") else [])):
                 verdict = "ADOPTED" if r["accepted"] else "rejected"
-                practice = r.get("practice", "good").upper()
-                print(f"  reflection → proposal to {r['kind']} a {practice} PRACTICE "
-                      f"guideline [{verdict}, {r['agree']}/{r['total']} agreed]: "
-                      f"\"{r['text']}\"", flush=True)
+                label = "DO" if r.get("practice", "good") == "good" else "AVOID"
+                who = f"{r['proposer']} proposes" if r.get("proposer") else "proposal"
+                print(f"  rulebook → {who} to {r['kind']} {label}: \"{r['text']}\" "
+                      f"[{verdict}, {r['agree']}/{r['total']} agreed]", flush=True)
     else:
         outcome = None
     standings = _standings(conn, rnd, verbose)
@@ -305,6 +305,8 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             "rival_held_tickers": forward._held_by_rivals(holdings_snapshot, aid),
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid),
             "rival_recent_moves": forward._rival_recent_moves(conn, rnd["id"], aid),
+            "rival_returns": {forward._name(conn, a): round(r, 2)
+                              for a, r in returns.items() if a != aid},
             "orders_not_executed_last_tick": _LAST_REJECTIONS.get(aid, []),
         }
         jobs.append({"aid": aid, "st": st, "name": name, "cfg": cfg, "view": view})
