@@ -79,7 +79,7 @@
       <span class="mono {{ 'up' if r.return_pct >= 0 else 'down' }}"
         style="margin-left:auto;">{{ r.return_pct|pct }}</span>
       <span class="mono muted" style="font-size:12px;min-width:72px;text-align:right;"
-        title="ELO change this round">ELO {{ '%+.1f'|format(r.rating_delta or 0) }}</span>
+        title="ELO change this round">ELO {{ '%+.1f'|format(r.rating_delta) if (r.rating_delta or 0)|abs >= 0.05 else '0.0' }}</span>
     </div>
   {% endfor %}
 </div>

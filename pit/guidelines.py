@@ -365,6 +365,18 @@ _VAGUE_STARTS = ("monitor", "consider", "keep an eye", "be careful", "be mindful
                  "stay ", "remember", "think about", "pay attention", "watch ")
 
 
+_OUT_OF_CONTROL = ("forced", "round-end", "round end", "deadline", "close-out",
+                   "closeout", "end of the round", "end of round")
+
+
+def _about_arena_mechanics(text: str) -> bool:
+    """Rules about the arena's own automatic actions (deadline close-out,
+    forced sells) — agents can't control them, yet kept proposing rules about
+    them even with those trades labelled forced_by_arena."""
+    low = text.lower()
+    return any(k in low for k in _OUT_OF_CONTROL)
+
+
 def _vague(text: str) -> bool:
     """'Monitor RSI…', 'Consider the trend…' — advice, not a rule anyone can
     follow or check. The first agent-written rulebook filled up with these."""
@@ -470,7 +482,7 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
                                      "bad" if data.get("practice") == "bad" else "good")
     if len(text) < 12 or _names_a_ticker(text, symbols or set()):
         return None
-    if _vague(text):
+    if _vague(text) or _about_arena_mechanics(text):
         return None
     return {"kind": "add", "practice": practice,
             "text": text[:200], "guideline_id": None, "proposer": lin["name"],
