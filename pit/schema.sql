@@ -50,7 +50,11 @@ CREATE TABLE IF NOT EXISTS rounds (
     length_days    INTEGER NOT NULL,
     goal_pct       REAL NOT NULL,
     status         TEXT NOT NULL DEFAULT 'running',  -- running | resolved
-    created_at     TEXT NOT NULL
+    created_at     TEXT NOT NULL,
+    ends_at        TEXT,                 -- live sessions: planned end (local)
+    interval_s     INTEGER,              -- live sessions: decision interval
+    last_tick_at   TEXT,                 -- live sessions: last agent wake-up
+    market         TEXT                  -- e.g. "Crypto", "US top 100"
 );
 
 -- Per-agent-per-round mutable state (capital, holdings, risk tracking).
@@ -61,6 +65,7 @@ CREATE TABLE IF NOT EXISTS round_states (
     starting_capital   REAL NOT NULL,
     current_capital    REAL NOT NULL,     -- cash only; total value = cash + holdings
     holdings           TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: qty}
+    mark_prices        TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: last marked price}
     cost_basis         TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: avg_buy_price},
                                               -- weighted average; drives the
                                               -- per-position hard stop-loss
@@ -165,7 +170,8 @@ CREATE TABLE IF NOT EXISTS guideline_proposals (
     source_round_id INTEGER REFERENCES rounds(id),
     resolution     TEXT,                  -- NULL (open) | accepted | rejected
     resolved_at    TEXT,
-    created_at     TEXT NOT NULL
+    created_at     TEXT NOT NULL,
+    proposer       TEXT                   -- lineage name that proposed it
 );
 
 CREATE TABLE IF NOT EXISTS guideline_votes (

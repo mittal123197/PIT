@@ -23,37 +23,61 @@ def leaderboard(conn: sqlite3.Connection) -> list[dict]:
            FROM lineages l JOIN agents a ON a.id = l.current_agent_id
            ORDER BY a.rating DESC"""
     ))
+    stats = lineage_stats(conn)
     for i, r in enumerate(rows, 1):
         r["position"] = i
         r["rating_timeline"] = rating_timeline(conn, r["id"])
+        st = stats.get(r["id"], {"played": 0, "podium": {}, "avg": None, "best": None})
+        r["played"], r["podium"] = st["played"], st["podium"]
+        r["avg_return"], r["best_return"] = st["avg"], st["best"]
     return rows
 
 
 def rating_timeline(conn: sqlite3.Connection, lineage_id: int) -> list[float]:
-    """Reconstruct a lineage's ELO over rounds from result deltas.
-
-    Ratings are stored per current generation (mutated in place), so the
-    per-round history is rebuilt from round_results, starting at the base ELO.
-    """
-    results = conn.execute(
-        """SELECT rr.winner_agent_id, rr.loser_agent_id, rr.rating_delta,
-                  wa.lineage_id AS win_lin, la.lineage_id AS lose_lin
-           FROM round_results rr
+    """A lineage's ELO after every round it played, from round_rankings (each
+    participant's own rating_delta). The old version rebuilt it from the
+    2-agent round_results table — in a 3-way round it skipped the middle
+    finisher entirely and gave the loser the winner's delta mirrored."""
+    rows = conn.execute(
+        """SELECT rr.rating_delta FROM round_rankings rr
            JOIN rounds r ON r.id = rr.round_id
-           JOIN agents wa ON wa.id = rr.winner_agent_id
-           JOIN agents la ON la.id = rr.loser_agent_id
-           ORDER BY r.round_number"""
-    ).fetchall()
+           JOIN agents a ON a.id = rr.agent_id
+           WHERE a.lineage_id=? ORDER BY r.round_number""", (lineage_id,)).fetchall()
     timeline = [DEFAULT.elo_base]
-    rating = DEFAULT.elo_base
-    for row in results:
-        if row["win_lin"] == lineage_id:
-            rating += row["rating_delta"]
-            timeline.append(round(rating, 1))
-        elif row["lose_lin"] == lineage_id:
-            rating -= row["rating_delta"]
-            timeline.append(round(rating, 1))
+    for row in rows:
+        timeline.append(round(timeline[-1] + (row["rating_delta"] or 0), 1))
     return timeline
+
+
+def lineage_stats(conn: sqlite3.Connection) -> dict[int, dict]:
+    """Per lineage: rounds played, podium finishes, average / best round return."""
+    out: dict[int, dict] = {}
+    for r in conn.execute(
+            """SELECT a.lineage_id, rr.rank, rr.return_pct FROM round_rankings rr
+               JOIN agents a ON a.id = rr.agent_id""").fetchall():
+        d = out.setdefault(r["lineage_id"], {"played": 0, "podium": {}, "rets": []})
+        d["played"] += 1
+        d["podium"][r["rank"]] = d["podium"].get(r["rank"], 0) + 1
+        d["rets"].append(r["return_pct"] or 0.0)
+    for d in out.values():
+        d["avg"] = round(sum(d["rets"]) / len(d["rets"]), 2) if d["rets"] else None
+        d["best"] = round(max(d["rets"]), 2) if d["rets"] else None
+    return out
+
+
+def elo_chart(conn: sqlite3.Connection) -> str:
+    series = []
+    for r in conn.execute("SELECT id, name FROM lineages ORDER BY id").fetchall():
+        tl = rating_timeline(conn, r["id"])
+        series.append({"name": r["name"], "color": lineage_color(r["id"]),
+                       "points": [(i, v) for i, v in enumerate(tl)]})
+    if max((len(s["points"]) for s in series), default=0) < 2:
+        return ""
+    n = max(len(s["points"]) for s in series) - 1
+    ticks = list(range(0, n + 1)) if n <= 14 else [0, n // 2, n]
+    return line_chart(series, y_fmt=lambda v: f"{v:.0f}", x_fmt=lambda x, x0: f"R{int(x)}" if x else "start",
+                      end_fmt=lambda v: f"{v:.0f}", height=210, zero_line=DEFAULT.elo_base,
+                      aria="ELO rating after each round, per agent", x_ticks=ticks)
 
 
 def recent_rounds(conn: sqlite3.Connection, limit: int = 25) -> list[dict]:
@@ -63,7 +87,8 @@ def recent_rounds(conn: sqlite3.Connection, limit: int = 25) -> list[dict]:
     (every round, now that the whole pool trades together)."""
     rounds = _rows(conn.execute(
         """SELECT r.id, r.round_number, r.length_days, r.goal_pct, r.status,
-                  rr.resolution_reason
+                  r.market, r.created_at, rr.resolution_reason,
+                  rr.created_at AS resolved_at
            FROM rounds r
            LEFT JOIN round_results rr ON rr.round_id = r.id
            ORDER BY r.round_number DESC LIMIT ?""",
@@ -87,6 +112,8 @@ def recent_rounds(conn: sqlite3.Connection, limit: int = 25) -> list[dict]:
         by_round.setdefault(row["round_id"], []).append(row)
     for r in rounds:
         r["rankings"] = by_round.get(r["id"], [])
+        r["duration"] = (_fmt_duration(r["created_at"], r["resolved_at"])
+                         if r.get("resolved_at") else None)
     return rounds
 
 
@@ -368,50 +395,61 @@ def race_series(conn, round_id: int) -> list[dict]:
 
 
 def race_chart(series: list[dict], width: int = 860, height: int = 230) -> str:
-    """Server-rendered SVG: every agent's return % over the session, one line
-    each in its lineage colour, zero line, end-of-line labels. No JS, works
-    with the page's meta-refresh."""
+    """Every agent's return % over a session (x = elapsed time)."""
+    return line_chart(series, y_fmt=lambda v: f"{v:+.2f}%",
+                      x_fmt=lambda t, t0: _fmt_secs(t - t0) if t > t0 else "start",
+                      end_fmt=lambda v: f"{v:+.2f}%", width=width, height=height,
+                      zero_line=0.0, aria="Return over time for each agent")
+
+
+def line_chart(series: list[dict], y_fmt, x_fmt, end_fmt, width: int = 860,
+               height: int = 230, zero_line: float | None = 0.0,
+               aria: str = "chart", x_ticks: list | None = None) -> str:
+    """Server-rendered multi-line SVG: one line per series in its colour, a
+    highlighted baseline, end-of-line labels nudged apart. No JS."""
     pts = [p for s in series for p in s["points"]]
     if len(pts) < 2:
         return ""
     t0, t1 = min(p[0] for p in pts), max(p[0] for p in pts)
-    lo, hi = min(min(p[1] for p in pts), 0.0), max(max(p[1] for p in pts), 0.0)
+    lo, hi = min(p[1] for p in pts), max(p[1] for p in pts)
+    if zero_line is not None:
+        lo, hi = min(lo, zero_line), max(hi, zero_line)
     pad = max((hi - lo) * 0.15, 0.05)
     lo, hi = lo - pad, hi + pad
-    L, R, T, B = 46, 110, 14, 26
+    L, R, T, B = 52, 118, 14, 26
     w, h = width - L - R, height - T - B
     X = lambda t: L + (t - t0) / ((t1 - t0) or 1) * w
     Y = lambda v: T + (hi - v) / (hi - lo) * h
     out = [f'<svg viewBox="0 0 {width} {height}" width="100%" preserveAspectRatio="none" '
-           'role="img" aria-label="Return over time for each agent" '
-           'style="display:block;max-height:260px;">']
-    # gridlines + y labels
+           f'role="img" aria-label="{aria}" style="display:block;max-height:{height + 30}px;">']
     step = _nice_step((hi - lo) / 4)
     v = (lo // step) * step
     while v <= hi:
         y = Y(v)
         if T - 1 <= y <= T + h + 1:
-            zero = abs(v) < step / 1000
             out.append(f'<line x1="{L}" x2="{L + w}" y1="{y:.1f}" y2="{y:.1f}" '
-                       f'stroke="{"#6C7076" if zero else "#23262e"}" stroke-width="1"'
-                       f'{"" if zero else " stroke-dasharray=\"2 4\""}/>')
+                       'stroke="#23262e" stroke-width="1" stroke-dasharray="2 4"/>')
             out.append(f'<text x="{L - 8}" y="{y + 4:.1f}" text-anchor="end" '
-                       f'font-size="10" fill="#6C7076" font-family="IBM Plex Mono">'
-                       f'{v:+.2f}%</text>')
+                       f'font-size="10" fill="#6C7076" font-family="IBM Plex Mono">{y_fmt(v)}</text>')
         v += step
-    # x labels: elapsed minutes
-    for frac in (0, 0.5, 1):
-        t = t0 + (t1 - t0) * frac
+    if zero_line is not None:
+        y = Y(zero_line)
+        out.append(f'<line x1="{L}" x2="{L + w}" y1="{y:.1f}" y2="{y:.1f}" '
+                   'stroke="#6C7076" stroke-width="1"/>')
+    for t in (x_ticks if x_ticks is not None else [t0 + (t1 - t0) * f for f in (0, 0.5, 1)]):
         out.append(f'<text x="{X(t):.1f}" y="{height - 6}" text-anchor="middle" '
-                   f'font-size="10" fill="#6C7076" font-family="IBM Plex Mono">'
-                   f'{_fmt_secs(t - t0) if frac else "start"}</text>')
-    # lines + end labels (nudged apart so they don't overlap)
+                   f'font-size="10" fill="#6C7076" font-family="IBM Plex Mono">{x_fmt(t, t0)}</text>')
     ends = []
     for s in series:
         p = s["points"]
+        if not p:
+            continue
         d = " ".join(f"{'M' if i == 0 else 'L'}{X(t):.1f},{Y(v):.1f}" for i, (t, v) in enumerate(p))
         out.append(f'<path d="{d}" fill="none" stroke="{s["color"]}" stroke-width="2.2" '
                    'stroke-linejoin="round" stroke-linecap="round"/>')
+        if len(p) <= 30:   # few points (e.g. one per round): mark each one
+            out += [f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="2.5" fill="{s["color"]}"/>'
+                    for t, v in p]
         ends.append([Y(p[-1][1]), s, p[-1]])
     ends.sort(key=lambda e: e[0])
     for i in range(1, len(ends)):
@@ -420,7 +458,7 @@ def race_chart(series: list[dict], width: int = 860, height: int = 230) -> str:
         out.append(f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="3.5" fill="{s["color"]}"/>')
         out.append(f'<text x="{L + w + 10}" y="{y + 4:.1f}" font-size="11.5" '
                    f'fill="{s["color"]}" font-family="IBM Plex Mono" font-weight="600">'
-                   f'{s["name"]} {v:+.2f}%</text>')
+                   f'{s["name"]} {end_fmt(v)}</text>')
     out.append("</svg>")
     return "".join(out)
 
@@ -563,13 +601,20 @@ def has_audit_log(conn: sqlite3.Connection, round_id: int) -> bool:
 def guidelines_overview(conn: sqlite3.Connection) -> dict:
     active = _rows(conn.execute(
         "SELECT * FROM guidelines WHERE status='active' ORDER BY id"))
+    retired = _rows(conn.execute(
+        "SELECT * FROM guidelines WHERE status='retired' ORDER BY id DESC LIMIT 6"))
+    status_by_text = {g["text"]: g["status"] for g in _rows(conn.execute(
+        "SELECT text, status FROM guidelines"))}
     proposals = _rows(conn.execute(
         """SELECT p.id, p.kind, p.practice, p.proposed_text, p.resolution,
-                  SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
+                  p.proposer, SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
            FROM guideline_proposals p
            LEFT JOIN guideline_votes v ON v.proposal_id = p.id
-           GROUP BY p.id ORDER BY p.id DESC LIMIT 8"""))
-    return {"active": active, "proposals": proposals}
+           GROUP BY p.id ORDER BY p.id DESC LIMIT 10"""))
+    for p in proposals:
+        # an adopted rule can be retired later — say so instead of a bare "adopted"
+        p["now"] = status_by_text.get(p["proposed_text"]) if p["kind"] == "add" else None
+    return {"active": active, "retired": retired, "proposals": proposals}
 
 
 def sparkline(values: list[float], width: int = 120, height: int = 28) -> str:

@@ -523,10 +523,11 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
             continue   # rulebook full — only removals can make room
         pid = conn.execute(
             """INSERT INTO guideline_proposals
-               (kind, practice, guideline_id, proposed_text, source_round_id, created_at)
-               VALUES (?,?,?,?,?,?)""",
+               (kind, practice, guideline_id, proposed_text, source_round_id,
+                created_at, proposer)
+               VALUES (?,?,?,?,?,?,?)""",
             (p["kind"], p["practice"], p.get("guideline_id"), p["text"],
-             source_round_id, _now())).lastrowid
+             source_round_id, _now(), p["proposer"])).lastrowid
         conn.commit()
         texts = active_texts(conn)
         # the proposer votes for its own proposal (no need to ask it); the

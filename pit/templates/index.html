@@ -20,14 +20,13 @@
   <h1>{% if summary.lineages == 2 %}Two{% elif summary.lineages == 3 %}Three
     {% else %}{{ summary.lineages }}{% endif %} AI agents.
     <span class="accent">Same round, same clock, no draws.</span></h1>
-  <p class="lead">Every lineage in the pool trades the same round at the same
-    time — not a rotating 1v1. Each agent sees every rival's live return and
-    which tickers they currently hold every decision, but never their entry
-    price, size, or reasoning. The top finisher's stake grows and it
-    reinforces what worked; everyone else is a loser and self-critiques its
-    own mistakes into a new generation (dead last takes the full penalty,
-    anyone strictly in the middle takes a smaller one). Survive, and the
-    rounds only get shorter.</p>
+  <p class="lead">Every agent in the pool trades the same market, over the same
+    window, at the same time, from the same data — and picks whatever it wants on
+    its own thesis. Each sees its rivals' live returns, holdings and latest moves,
+    never their reasoning. At the deadline the pool is ranked: the winner keeps
+    going and reinforces what worked; every other agent is retired and recreated
+    from its own self-critique. Between rounds the agents write and vote on their
+    own shared rulebook.</p>
   <div class="howflow">
     <div class="howstep s1"><div class="n">01</div>
       <div class="t">Battle</div>
@@ -48,8 +47,9 @@
         a money advantage.</div></div>
     <div class="howstep s4"><div class="n">04</div>
       <div class="t">Repeat</div>
-      <div class="d">The pool also votes shared DO/AVOID guidelines into a
-        "constitution," drawn from what agents actually learned.</div></div>
+      <div class="d">After every round each agent may propose a DO or AVOID rule
+        from its own trades; the others vote, and a majority of the whole pool
+        writes it into everyone's rulebook.</div></div>
   </div>
 </div>
 
@@ -78,7 +78,8 @@
       <span class="agentname">{{ r.lineage }}</span>
       <span class="mono {{ 'up' if r.return_pct >= 0 else 'down' }}"
         style="margin-left:auto;">{{ r.return_pct|pct }}</span>
-      <span class="mono muted" style="font-size:12px;">stake ×{{ '%.2f'|format(r.stake_mult) }}</span>
+      <span class="mono muted" style="font-size:12px;min-width:72px;text-align:right;"
+        title="ELO change this round">ELO {{ '%+.1f'|format(r.rating_delta or 0) }}</span>
     </div>
   {% endfor %}
 </div>
@@ -119,13 +120,13 @@
 <div class="sec"><div class="eyebrow">Standings</div>
   <div class="subtitle">Ranked by ELO — beating a strong agent moves you more than
     beating a weak one. Click a row for that lineage's evolution.</div></div>
-{% set max_stake = (board|map(attribute='current_stake')|max) or 1 %}
 <div class="panel">
   <table>
     <thead><tr>
       <th>#</th><th>Agent</th><th>ELO</th><th class="hide-sm">Trend</th>
-      <th class="hide-sm">Record</th><th>Gen</th><th class="hide-sm">Return</th>
-      <th>Capital</th>
+      <th class="hide-sm">Record</th><th class="hide-sm">Podium</th>
+      <th>Avg / round</th><th class="hide-sm">Best round</th><th class="hide-sm">Gen</th>
+      {% if stake_evolution %}<th>Stake</th>{% endif %}
     </tr></thead>
     <tbody>
     {% for r in board %}
@@ -144,22 +145,17 @@
             <span class="mono muted" style="font-size:11px;">{{ r.wins }}–{{ r.losses }}</span>
           </div>
         </td>
-        <td class="mono">{{ r.generation }}</td>
-        <td class="hide-sm mono {{ 'up' if r.cumulative_return_pct >= 0 else 'down' }}">
-          {{ r.cumulative_return_pct|pct }}</td>
-        <td>
-          <div style="display:flex;align-items:center;gap:9px;">
-            <div class="bar" title="stake relative to the field">
-              <span style="width:{{ (r.current_stake/max_stake*100)|round }}%;
-                background:{{ r.id|lcolor }};"></span></div>
-            <span class="mono" style="font-size:12px;">{{ r.current_stake|money }}</span>
-          </div>
-        </td>
+        <td class="hide-sm mono" style="font-size:12px;white-space:nowrap;" title="1st / 2nd / 3rd place finishes">
+          <span style="color:var(--gold);">1st×{{ r.podium.get(1, 0) }}</span>
+          <span class="muted">· 2nd×{{ r.podium.get(2, 0) }} · 3rd×{{ r.podium.get(3, 0) }}</span></td>
+        <td class="mono {{ 'up' if (r.avg_return or 0) > -0.005 else 'down' }}">{{ r.avg_return|pct }}</td>
+        <td class="hide-sm mono {{ 'up' if (r.best_return or 0) > -0.005 else 'down' }}">{{ r.best_return|pct }}</td>
+        <td class="hide-sm mono">{{ r.generation }}</td>
+        {% if stake_evolution %}<td class="mono">{{ r.current_stake|money }}</td>{% endif %}
       </tr>
     {% else %}
-      <tr><td colspan="8" class="muted" style="padding:22px;">
-        No agents yet — run <span class="mono">pit.cli init</span> then
-        <span class="mono">pit.cli arena</span>.</td></tr>
+      <tr><td colspan="9" class="muted" style="padding:22px;">
+        No agents yet — start a session with <span class="mono">scripts/run_arena.sh</span>.</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -167,20 +163,27 @@
 <div class="legend">
   <span><i style="background:var(--alpha);"></i> wins</span>
   <span><i style="background:var(--liq);"></i> losses</span>
-  <span><i style="background:var(--violet);"></i> ELO trend (sparkline)</span>
-  <span><i style="background:var(--cyan);"></i> capital bar = stake vs. the field</span>
+  <span><i style="background:var(--violet);"></i> ELO trend</span>
+  <span>gen = how many times the lineage has been recreated after a loss</span>
 </div>
 
+{% if elo_svg %}
+<div class="sec"><div class="eyebrow">Rating over time</div>
+  <div class="subtitle">Each agent's ELO after every round — the long-run scoreboard.</div></div>
+<div class="panel racewrap" style="padding:14px 10px 6px;">{{ elo_svg|safe }}</div>
+{% endif %}
+
 <div class="sec"><div class="eyebrow">The constitution</div>
-  <div class="subtitle">Shared rules the agents can vote into force. A reflection
-    pass proposes one when a pattern keeps recurring; a strict majority adopts it.</div></div>
+  <div class="subtitle">The rulebook every agent reads before each decision. After
+    every round each agent may propose one rule from its own trades; it takes a
+    majority of the whole pool to adopt it.</div></div>
 <div class="panel">
   <div style="padding:16px 20px;">
     {% if constitution.active %}
       {% for gl in constitution.active %}
         <div style="display:flex;gap:12px;align-items:baseline;padding:9px 0;
           {% if not loop.last %}border-bottom:1px solid var(--line-soft);{% endif %}">
-          <span class="pill gold">✓ v{{ gl.version }}</span>
+          <span class="pill gold">rule {{ loop.index }}</span>
           <span class="pill {{ 'win' if gl.practice == 'good' else 'lose' }}">
             {{ 'DO' if gl.practice == 'good' else 'AVOID' }}</span>
           <span style="font-size:13.5px;">{{ gl.text }}</span>
@@ -193,17 +196,19 @@
   </div>
   {% if constitution.proposals %}
   <table>
-    <thead><tr><th>Proposal</th><th>Type</th><th>Vote</th><th>Outcome</th></tr></thead>
+    <thead><tr><th>Proposal</th><th class="hide-sm">By</th><th>Type</th><th>Vote</th><th>Outcome</th></tr></thead>
     <tbody>
     {% for p in constitution.proposals %}
       <tr>
-        <td style="max-width:520px;">{{ p.proposed_text }}</td>
+        <td style="min-width:220px;max-width:520px;">{{ p.proposed_text }}</td>
+        <td class="hide-sm agentname" style="font-size:12.5px;">{{ p.proposer or '—' }}</td>
         <td><span class="pill status">{{ p.kind }}</span>
           <span class="pill {{ 'win' if p.practice == 'good' else 'lose' }}">
             {{ 'DO' if p.practice == 'good' else 'AVOID' }}</span></td>
         <td class="mono">{{ p.agree or 0 }}/{{ p.total or 0 }}</td>
         <td>
-          {% if p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>
+          {% if p.resolution == 'accepted' and p.now == 'retired' %}<span class="pill status">adopted · retired</span>
+          {% elif p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>
           {% elif p.resolution == 'rejected' %}<span class="pill lose">✕ rejected</span>
           {% else %}<span class="pill status">open</span>{% endif %}
         </td>
@@ -215,30 +220,35 @@
 </div>
 
 <div class="sec"><div class="eyebrow">Recent rounds</div>
-  <div class="subtitle">Every round, newest first. Click through for the trades.</div></div>
+  <div class="subtitle">Every round, newest first. Click through for the trades and the race chart.</div></div>
 <div class="panel">
   <table>
     <thead><tr>
-      <th>Round</th><th class="hide-sm">Length</th><th>Winner</th><th>Return</th>
+      <th>Round</th><th class="hide-sm">Market</th><th class="hide-sm">Length</th>
+      <th>Winner</th><th>Return</th><th class="hide-sm">Field</th>
     </tr></thead>
     <tbody>
     {% for r in rounds %}
       <tr class="clickable" onclick="location='/round/{{ r.id }}'">
         <td class="mono muted">#{{ r.round_number }}</td>
-        <td class="mono hide-sm muted">{{ r.length_days ~ 'd' if r.length_days else 'live' }}</td>
+        <td class="hide-sm" style="font-size:12.5px;">{{ r.market or '—' }}</td>
+        <td class="mono hide-sm muted">{{ r.duration or (r.length_days ~ 'd' if r.length_days else '—') }}</td>
         {% if r.rankings %}
           {% set w = r.rankings[0] %}
-          <td>
+          <td style="white-space:nowrap;">
             <span class="dot" style="background:{{ w.lineage_id|lcolor }};"></span>
             <span class="agentname">{{ w.lineage }}</span>
           </td>
-          <td class="mono {{ 'up' if w.return_pct >= 0 else 'down' }}">{{ w.return_pct|pct }}</td>
+          <td class="mono {{ 'up' if w.return_pct > -0.005 else 'down' }}">{{ w.return_pct|pct }}</td>
+          <td class="hide-sm mono" style="font-size:12px;white-space:nowrap;">
+            {% for p in r.rankings[1:] %}<span class="muted">{{ p.lineage }}</span>
+              <span class="{{ 'up' if p.return_pct > -0.005 else 'down' }}">{{ p.return_pct|pct }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</td>
         {% else %}
-          <td colspan="2"><span class="pill status">running</span></td>
+          <td colspan="3"><span class="pill status">running</span></td>
         {% endif %}
       </tr>
     {% else %}
-      <tr><td colspan="4" class="muted" style="padding:22px;">No rounds yet.</td></tr>
+      <tr><td colspan="6" class="muted" style="padding:22px;">No rounds yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>

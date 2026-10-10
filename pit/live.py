@@ -54,6 +54,17 @@ def _persist_audit(conn, round_id, agent_id, trace: list[dict]) -> None:
 _LAST_REJECTIONS: dict[int, list[str]] = {}
 
 
+def _market_label() -> str:
+    """Human label for what this session trades, shown on the leaderboard."""
+    mode = market.TRADE_UNIVERSE_MODE
+    base = ("Crypto" if MARKET == "crypto" else
+            {"top100": "US top 100", "top500": "US S&P 500", "full": "US all-listed"}
+            .get(mode, f"US {mode}") if MARKET == "us" else MARKET.upper())
+    if replay._STATE and replay._STATE.get("day"):
+        return f"{base} · replay {replay._STATE['day']}"
+    return base
+
+
 def _price_fn():
     cache: dict[str, float | None] = {}
 
@@ -106,9 +117,9 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         brief_mod.prefetch_fundamentals(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
                                         verbose)
     end = time.time() + minutes * 60
-    conn.execute("UPDATE rounds SET ends_at=?, interval_s=? WHERE id=?",
+    conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=? WHERE id=?",
                  (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"),
-                  int(interval), rnd["id"]))
+                  int(interval), _market_label(), rnd["id"]))
     for r in conn.execute("SELECT agent_id, final_return_pct FROM round_states "
                           "WHERE round_id=?", (rnd["id"],)).fetchall():
         conn.execute("INSERT INTO round_marks (round_id, agent_id, ts, return_pct) "

@@ -15,7 +15,7 @@ from markupsafe import Markup
 
 from . import db as dbm
 from . import queries as q
-from .config import CURRENCY
+from .config import CURRENCY, DEFAULT
 
 app = Flask(__name__)
 # Always pick up template edits without a restart — Jinja's auto-reload
@@ -101,6 +101,8 @@ def index():
         constitution=q.guidelines_overview(conn),
         h2h=q.latest_head_to_head(conn),
         live=q.live_status(conn),
+        elo_svg=q.elo_chart(conn),
+        stake_evolution=bool(DEFAULT.stake_evolution),
     )
 
 

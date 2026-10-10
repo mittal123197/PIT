@@ -67,6 +67,9 @@ _COLUMN_ADDITIONS = [
     ("rounds", "ends_at", "TEXT"),
     ("rounds", "interval_s", "INTEGER"),
     ("rounds", "last_tick_at", "TEXT"),
+    # what was traded: "Crypto", "US top 100", "US replay · 2026-10-09", ...
+    ("rounds", "market", "TEXT"),
+    ("guideline_proposals", "proposer", "TEXT"),
 ]
 
 
