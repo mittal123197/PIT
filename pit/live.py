@@ -112,6 +112,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
                 decision += 1
                 tick_started = time.time()
                 _tick(conn, config, rnd, decision, verbose, debug)
+                _refresh_marks(conn, config, rnd, verbose)   # returns update even if ticks run back-to-back
                 # from tick START: a tick that takes longer than `interval`
                 # (slow local model) runs the next one straight away, instead
                 # of idling another full `interval` after it finishes — that
@@ -229,19 +230,16 @@ def _refresh_marks(conn, config, rnd, verbose):
 
 
 def _tick(conn, config, rnd, tick, verbose, debug=False):
-    # In replay mode, freeze the sim clock for the whole tick: without this,
-    # the real wall-clock time spent on N agents' multi-turn LLM decisions
-    # gets counted as elapsed *market* time too (at compressed speed), which
-    # both (a) can race the clock past end-of-day mid-tick, freezing every
-    # later mark-to-market refresh on the day's last bar, and (b) means
-    # whichever agent gets decided last would see a later simulated instant
-    # than the first — contradicting "every agent trades the same round, at
-    # the same time." No-op outside replay mode. See replay.pause().
-    replay.pause()
-    try:
-        _tick_body(conn, config, rnd, tick, verbose, debug)
-    finally:
-        replay.resume()
+    # The replay clock is NOT paused here. It used to be (so slow LLM
+    # thinking couldn't burn simulated market time), but with agents deciding
+    # concurrently and ticks scheduled from their start, a tick can fill the
+    # whole interval — freezing the clock for the entire run: zero price
+    # marks and every return stuck at 0.00% (seen live). Consistency inside a
+    # tick doesn't need a frozen clock anyway: positions, fills and returns
+    # all use the per-tick price cache (_price_fn), and the per-tick snapshot
+    # keeps every agent's view identical. At sensible compression (compress
+    # >= ~10) a tick is a few simulated minutes, nowhere near end-of-day.
+    _tick_body(conn, config, rnd, tick, verbose, debug)
 
 
 def _tick_body(conn, config, rnd, tick, verbose, debug=False):

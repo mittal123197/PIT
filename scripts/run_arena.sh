@@ -19,6 +19,7 @@ COMPRESS=9             # replay: compress one real trading day into this many mi
 REPLAY_DATE=""         # replay: which real day (default: pit.cli's own "last trading day")
 MINUTES=15             # live: session length in minutes
 INTERVAL=300           # live: seconds between agent decisions
+INTERVAL_SET=0        # 1 if --interval was given explicitly
 REFRESH=5              # seconds between cheap mark-to-market refreshes
 DEBUG=1                # 1 = record the full audit trail (thoughts/tools/actions)
 RESET=0                # 1 = wipe the local DB before running (fresh pool, fresh stakes)
@@ -61,7 +62,7 @@ while [[ $# -gt 0 ]]; do
     --compress) COMPRESS="$2"; shift 2 ;;
     --date) REPLAY_DATE="$2"; shift 2 ;;
     --minutes) MINUTES="$2"; shift 2 ;;
-    --interval) INTERVAL="$2"; shift 2 ;;
+    --interval) INTERVAL="$2"; INTERVAL_SET=1; shift 2 ;;
     --refresh) REFRESH="$2"; shift 2 ;;
     --no-debug) DEBUG=0; shift ;;
     --reset) RESET=1; shift ;;
@@ -185,6 +186,8 @@ for i in $(seq 1 "$BATTLES"); do
   ARGS=(live)
   if [[ "$MODE" == "replay" ]]; then
     ARGS+=(--replay --compress "$COMPRESS" --refresh "$REFRESH")
+    # only override pit.cli's own compress-scaled default when asked to
+    [[ "$INTERVAL_SET" == "1" ]] && ARGS+=(--interval "$INTERVAL")
     [[ -n "$REPLAY_DATE" ]] && ARGS+=(--date "$REPLAY_DATE")
   else
     ARGS+=(--minutes "$MINUTES" --interval "$INTERVAL" --refresh "$REFRESH")

@@ -267,6 +267,11 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
             "date": date, "logs": logs}
 
 
+# Smallest order worth executing. Without it agents made $0.02 "trades"
+# (0.0001 shares) that count as trades and clutter the ledger.
+MIN_ORDER_USD = 1.0
+
+
 def _floor_qty(x: float) -> float:
     """Floor to 4 decimals (fractional shares) — never rounds UP, so a buy
     can't exceed the cash/budget it was sized from."""
@@ -291,7 +296,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
             # agent's budget (e.g. LITE at $1,114 vs a $560 budget -> 0
             # shares -> order discarded, agent retries it every tick).
             qty = _floor_qty(min(budget, cash) / px)
-            if qty <= 0 or qty * px < 0.01:
+            if qty <= 0 or qty * px < MIN_ORDER_USD:
                 rejected.append(f"buy {o['ticker']}: ${min(budget, cash):,.2f} "
                                 f"available, nothing to buy at ${px:,.2f}")
                 continue
@@ -308,6 +313,10 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
             qty = _floor_qty(o.get("qty", held) if "qty" in o
                              else (o.get("amount_inr", held * px) / px))
             qty = min(qty, held)
+            # selling (almost) the whole position closes it: flooring to 4
+            # decimals otherwise strands dust (0.0001 shares) in holdings
+            if (held - qty) * px < MIN_ORDER_USD:
+                qty = held
             if qty <= 0:
                 rejected.append(f"sell {o['ticker']}: nothing held to sell")
                 continue
