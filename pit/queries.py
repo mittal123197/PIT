@@ -310,6 +310,11 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
         pos.sort(key=lambda p: p["value"], reverse=True)
         a["positions"] = pos
         total = a["value"] or 1.0
+        invested = sum(p["value"] for p in pos)
+        unreal = sum(p["value"] - p["qty"] * (p["cost"] or p["price"] or 0) for p in pos)
+        a["exposure_pct"] = round(invested / total * 100) if total else 0
+        a["unrealized"] = round(unreal, 2)
+        a["realized"] = round((a["value"] - a["starting_capital"]) - unreal, 2)
         a["alloc"] = ([{"label": p["symbol"], "pct": max(0.0, p["value"] / total * 100)}
                        for p in pos] +
                       [{"label": "cash", "pct": max(0.0, a["current_capital"] / total * 100)}])
@@ -321,9 +326,27 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
     rd = dict(r)
     timing = _session_timing(rd)
     series = race_series(conn, r["id"])
+    dd = _max_drawdowns(conn, r["id"])
+    for a in agents:
+        a["max_dd"] = dd.get(a["agent_id"])
+    bench = next((s for s in series if s.get("dash")), None)
+    bench_now = round(bench["points"][-1][1], 2) if bench else None
     return {"round": rd, "agents": agents, "messages": messages,
             "is_live": r["status"] == "live", "timing": timing,
-            "race_svg": race_chart(series), "risk": _risk_bands(rd)}
+            "race_svg": race_chart(series), "risk": _risk_bands(rd),
+            "bench_name": bench["name"] if bench else None, "bench_now": bench_now}
+
+
+def _max_drawdowns(conn, round_id: int) -> dict[int, float]:
+    """Worst peak-to-trough fall of each agent's account this round, in %."""
+    out: dict[int, tuple[float, float]] = {}
+    for r in conn.execute("SELECT agent_id, return_pct FROM round_marks "
+                          "WHERE round_id=? ORDER BY id", (round_id,)).fetchall():
+        eq = 1 + (r["return_pct"] or 0) / 100
+        peak, worst = out.get(r["agent_id"], (eq, 0.0))
+        peak = max(peak, eq)
+        out[r["agent_id"]] = (peak, min(worst, (eq / peak - 1) * 100))
+    return {k: round(v[1], 2) for k, v in out.items()}
 
 
 def _json(v) -> dict:
@@ -391,7 +414,26 @@ def race_series(conn, round_id: int) -> list[dict]:
                                           "color": lineage_color(r["lineage_id"]),
                                           "points": []})
         s["points"].append((t.timestamp(), r["return_pct"]))
-    return list(by.values())
+    # buy/sell markers on each agent's line (forced closes excluded — not a decision)
+    from .forward import is_forced
+    for r in _rows(conn.execute(
+            "SELECT agent_id, ts, side, symbol, reason FROM trades WHERE round_id=? ORDER BY id",
+            (round_id,))):
+        t = _parse_local(r["ts"])
+        if t and r["agent_id"] in by and not is_forced(r["reason"]):
+            by[r["agent_id"]].setdefault("marks", []).append(
+                (t.timestamp(), r["side"], r["symbol"]))
+    series = list(by.values())
+    bench = _rows(conn.execute(
+        "SELECT ts, symbol, price FROM benchmark_marks WHERE round_id=? ORDER BY id",
+        (round_id,)))
+    if len(bench) >= 2 and bench[0]["price"]:
+        p0 = bench[0]["price"]
+        pts = [(_parse_local(b["ts"]).timestamp(), (b["price"] / p0 - 1) * 100)
+               for b in bench if _parse_local(b["ts"])]
+        series.append({"name": bench[0]["symbol"].replace("-USD", "") + " hold",
+                       "color": "#8b9099", "dash": True, "points": pts})
+    return series
 
 
 def race_chart(series: list[dict], width: int = 860, height: int = 230) -> str:
@@ -408,7 +450,7 @@ def line_chart(series: list[dict], y_fmt, x_fmt, end_fmt, width: int = 860,
     """Server-rendered multi-line SVG: one line per series in its colour, a
     highlighted baseline, end-of-line labels nudged apart. No JS."""
     pts = [p for s in series for p in s["points"]]
-    if len(pts) < 2:
+    if len({p[0] for p in pts}) < 2:      # need at least two moments in time
         return ""
     t0, t1 = min(p[0] for p in pts), max(p[0] for p in pts)
     lo, hi = min(p[1] for p in pts), max(p[1] for p in pts)
@@ -445,9 +487,21 @@ def line_chart(series: list[dict], y_fmt, x_fmt, end_fmt, width: int = 860,
         if not p:
             continue
         d = " ".join(f"{'M' if i == 0 else 'L'}{X(t):.1f},{Y(v):.1f}" for i, (t, v) in enumerate(p))
-        out.append(f'<path d="{d}" fill="none" stroke="{s["color"]}" stroke-width="2.2" '
+        dash = ' stroke-dasharray="5 4"' if s.get("dash") else ""
+        out.append(f'<path d="{d}" fill="none" stroke="{s["color"]}" '
+                   f'stroke-width="{1.6 if s.get("dash") else 2.2}"{dash} '
                    'stroke-linejoin="round" stroke-linecap="round"/>')
-        if len(p) <= 30:   # few points (e.g. one per round): mark each one
+        for (mt, side, sym) in s.get("marks", []):
+            if not (t0 <= mt <= t1):
+                continue
+            mv = _interp(p, mt)
+            cx, cy = X(mt), Y(mv)
+            tri = (f"M{cx:.1f},{cy - 9:.1f} l-5,8 h10 z" if side == "buy"
+                   else f"M{cx:.1f},{cy + 9:.1f} l-5,-8 h10 z")
+            fill = "#3ddc97" if side == "buy" else "#f0563c"
+            out.append(f'<path d="{tri}" fill="{fill}" stroke="#0e1014" stroke-width="1">'
+                       f'<title>{side} {sym}</title></path>')
+        if len(p) <= 30 and not s.get("marks"):   # few points (e.g. one per round): mark each one
             out += [f'<circle cx="{X(t):.1f}" cy="{Y(v):.1f}" r="2.5" fill="{s["color"]}"/>'
                     for t, v in p]
         ends.append([Y(p[-1][1]), s, p[-1]])
@@ -461,6 +515,16 @@ def line_chart(series: list[dict], y_fmt, x_fmt, end_fmt, width: int = 860,
                    f'{s["name"]} {end_fmt(v)}</text>')
     out.append("</svg>")
     return "".join(out)
+
+
+def _interp(points, t) -> float:
+    """y of a polyline at x=t (clamped to the ends)."""
+    if t <= points[0][0]:
+        return points[0][1]
+    for (t1, v1), (t2, v2) in zip(points, points[1:]):
+        if t1 <= t <= t2:
+            return v1 if t2 == t1 else v1 + (v2 - v1) * (t - t1) / (t2 - t1)
+    return points[-1][1]
 
 
 def _nice_step(raw: float) -> float:

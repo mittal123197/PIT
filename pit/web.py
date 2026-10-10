@@ -56,7 +56,9 @@ def _money2(value) -> str:
     $0.01 cash balance as "$0" and a $307.51 fill as "$308"."""
     if value is None:
         return "—"
-    return f"{CURRENCY}{value:,.2f}"
+    if abs(value) < 0.005:
+        return f"{CURRENCY}0.00"
+    return f"{'−' if value < 0 else ''}{CURRENCY}{abs(value):,.2f}"
 
 
 @app.template_filter("price")

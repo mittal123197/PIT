@@ -54,6 +54,22 @@ def _persist_audit(conn, round_id, agent_id, trace: list[dict]) -> None:
 _LAST_REJECTIONS: dict[int, list[str]] = {}
 
 
+def benchmark_symbol() -> str:
+    """Buy-and-hold reference for the race chart: BTC for crypto, SPY for US."""
+    return os.getenv("PIT_BENCHMARK") or ("BTC-USD" if MARKET == "crypto" else "SPY")
+
+
+def _mark_benchmark(conn, rnd, price) -> None:
+    sym = benchmark_symbol()
+    try:
+        px = price(sym)
+    except Exception:
+        px = None
+    if px:
+        conn.execute("INSERT INTO benchmark_marks (round_id, ts, symbol, price) "
+                     "VALUES (?,?,?,?)", (rnd["id"], forward.local_ts(), sym, px))
+
+
 def _market_label() -> str:
     """Human label for what this session trades, shown on the leaderboard."""
     mode = market.TRADE_UNIVERSE_MODE
@@ -125,6 +141,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         conn.execute("INSERT INTO round_marks (round_id, agent_id, ts, return_pct) "
                      "VALUES (?,?,?,?)", (rnd["id"], r["agent_id"],
                                           forward.local_ts(), r["final_return_pct"] or 0.0))
+    _mark_benchmark(conn, rnd, _price_fn())
     conn.commit()
     decision = 0
     decision_due = 0.0  # force a decision immediately
@@ -251,6 +268,7 @@ def _refresh_marks(conn, config, rnd, verbose):
                      "VALUES (?,?,?,?)", (rnd["id"], st["agent_id"], forward.local_ts(),
                                           round(ret, 3)))
         line.append(f"{forward._name(conn, st['agent_id'])} {ret:+.2f}%")
+    _mark_benchmark(conn, rnd, price)
     conn.commit()
     if verbose:
         print(f"  · mark {datetime.now().strftime('%H:%M:%S')}: {'  '.join(line)}",

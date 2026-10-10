@@ -63,20 +63,30 @@
   {% if data.timing %}<div class="progress"><div style="width:{{ data.timing.pct }}%;"></div></div>{% endif %}
 </div>
 
-{% if data.race_svg %}
+{% set top = data.agents[0].ret if data.agents else 0 %}
+{% set tied_top = (data.agents|selectattr('ret', 'equalto', top)|list|length) > 1 %}
+{% if data.race_svg or data.is_live %}
 <div class="sec" style="margin-top:6px;"><div class="eyebrow">The race</div>
-  <div class="subtitle">Every agent's return over the session, marked every few seconds.</div></div>
+  <div class="subtitle">Every agent's return over the session, marked every few seconds.
+    <span style="color:#3ddc97;">▲</span> buy · <span style="color:#f0563c;">▼</span> sell{% if data.bench_name %}
+    · dashed grey = <b>{{ data.bench_name }}</b> (just holding the market{% if data.bench_now is not none %}:
+    <span class="mono {{ 'up' if data.bench_now > -0.005 else 'down' }}">{{ data.bench_now|pct }}</span>{% endif %}){% endif %}</div></div>
+{% if data.race_svg %}
 <div class="panel racewrap" style="padding:14px 10px 6px;">{{ data.race_svg|safe }}</div>
+{% else %}
+<div class="panel muted" style="padding:28px 20px;font-size:13px;text-align:center;">
+  The chart starts drawing after the first price marks — a few seconds in.</div>
+{% endif %}
 {% endif %}
 
 <div class="grid3">
   {% for a in data.agents %}
   {% set col = a.lineage_id|lcolor %}
-  <div class="panel" style="margin-bottom:0;border-color:{{ col if loop.first else 'var(--line)' }};">
+  <div class="panel" style="margin-bottom:0;border-color:{{ col if (loop.first and not tied_top) else 'var(--line)' }};">
     <h2 style="display:flex;justify-content:space-between;align-items:center;">
       <span><span class="dot" style="background:{{ col }};"></span>{{ a.name }}
         <span class="mono muted" style="font-size:11px;font-weight:400;">#{{ loop.index }}</span></span>
-      {% if loop.first %}<span class="pill gold">leading</span>{% endif %}
+      {% if loop.first and not tied_top %}<span class="pill gold">leading</span>{% endif %}
       {% if a.status == 'liquidated' %}<span class="pill lose">stopped out</span>{% endif %}
       {% if a.status == 'goal_hit' %}<span class="pill win">profit booked</span>{% endif %}
     </h2>
@@ -86,6 +96,13 @@
       <div class="mono muted" style="font-size:12.5px;margin-top:4px;">
         {{ a.value|money2 }} <span class="muted">·</span> cash {{ a.current_capital|money2 }}
         <span class="muted">·</span> {{ a.trade_count }} trades</div>
+      <div class="mono" style="font-size:11.5px;margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--ink-soft);">
+        <span title="share of the account in positions">exposure <b style="color:var(--ink);">{{ a.exposure_pct }}%</b></span>
+        <span title="profit/loss locked in by sells">realized <b class="{{ 'up' if a.realized > -0.005 else 'down' }}">{{ a.realized|money2 }}</b></span>
+        <span title="profit/loss on positions still open">open <b class="{{ 'up' if a.unrealized > -0.005 else 'down' }}">{{ a.unrealized|money2 }}</b></span>
+        {% if a.max_dd is not none %}<span title="worst fall from this round's peak">max DD <b class="{{ 'down' if a.max_dd < -0.005 else '' }}">{{ a.max_dd|pct }}</b></span>{% endif %}
+        {% if data.bench_now is not none %}<span title="return minus just holding {{ data.bench_name }}">vs mkt <b class="{{ 'up' if (a.ret - data.bench_now) > -0.005 else 'down' }}">{{ (a.ret - data.bench_now)|pct }}</b></span>{% endif %}
+      </div>
       <div class="alloc" title="allocation: positions vs cash">
         {% for seg in a.alloc %}
           <span style="width:{{ '%.2f'|format(seg.pct) }}%;background:{{ 'var(--ink-faint)' if seg.label == 'cash' else col }};opacity:{{ 0.35 if seg.label == 'cash' else (1.0 - loop.index0 * 0.18) if loop.index0 < 4 else 0.3 }};"
@@ -115,7 +132,9 @@
 </div>
 
 <div class="sec"><div class="eyebrow">Open positions</div>
-  <div class="subtitle">What each agent is holding right now — entry price and how long held.</div></div>
+  <div class="subtitle">What each agent is holding right now — entry price and how long held.
+    Prices come from Yahoo's free feed: majors update every few seconds, smaller
+    coins and stocks every minute or two, so "Now" can sit at the entry price for a while.</div></div>
 <div class="panel">
   <table>
     <thead><tr><th>Agent</th><th>Asset</th><th>Qty</th><th>Buy price</th>
@@ -171,8 +190,8 @@
   <div class="subtitle">The raw ledger — each buy/sell as it happened.</div></div>
 <div class="panel">
   <table>
-    <thead><tr><th>Date/Time</th><th>Agent</th><th>Side</th><th>Qty</th><th>Stock</th>
-      <th>Price</th><th class="hide-sm">Reason</th></tr></thead>
+    <thead><tr><th>Date/Time</th><th>Agent</th><th>Side</th><th>Qty</th><th>Asset</th>
+      <th>Price</th><th>Size</th><th class="hide-sm">Reason</th></tr></thead>
     <tbody>
     {% for f in trades.fills %}
       <tr>
@@ -182,10 +201,11 @@
         <td class="mono">{{ f.qty|qty }}</td>
         <td class="mono">{{ f.symbol }}</td>
         <td class="mono">{{ f.price|price }}</td>
+        <td class="mono">{{ (f.qty * f.price)|money2 }}</td>
         <td class="muted hide-sm" style="font-size:12px;">{{ f.reason or '' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="7" class="muted" style="padding:18px;">No trades yet.</td></tr>
+      <tr><td colspan="8" class="muted" style="padding:18px;">No trades yet.</td></tr>
     {% endfor %}
     </tbody>
   </table>

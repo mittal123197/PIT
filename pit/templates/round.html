@@ -156,7 +156,7 @@
 <div class="panel">
   <table>
     <thead><tr>
-      <th>Date/Time</th><th>Lineage</th><th>Side</th><th>Qty</th><th>Symbol</th><th>Price</th>
+      <th>Date/Time</th><th>Lineage</th><th>Side</th><th>Qty</th><th>Asset</th><th>Price</th><th>Size</th>
       <th class="hide-sm">Cash after</th><th class="hide-sm">Reason</th>
     </tr></thead>
     <tbody>
@@ -168,11 +168,12 @@
         <td class="mono">{{ t.qty|qty }}</td>
         <td class="mono">{{ t.symbol }}</td>
         <td class="mono">{{ t.price|price }}</td>
+        <td class="mono">{{ (t.qty * t.price)|money2 }}</td>
         <td class="mono hide-sm">{{ t.capital_after|money2 }}</td>
         <td class="muted hide-sm" style="font-size:12px;">{{ t.reason or '' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="8" class="muted" style="padding:22px;">No trades in this round.</td></tr>
+      <tr><td colspan="9" class="muted" style="padding:22px;">No trades in this round.</td></tr>
     {% endfor %}
     </tbody>
   </table>

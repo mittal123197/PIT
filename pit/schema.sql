@@ -243,3 +243,15 @@ CREATE TABLE IF NOT EXISTS round_marks (
     return_pct  REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_round_marks_round ON round_marks(round_id, id);
+
+-- The market benchmark's price over a live session (BTC-USD for crypto, SPY
+-- for US), sampled with the agents' marks — the buy-and-hold line every
+-- agent's return is judged against on the race chart.
+CREATE TABLE IF NOT EXISTS benchmark_marks (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id  INTEGER NOT NULL REFERENCES rounds(id),
+    ts        TEXT NOT NULL,
+    symbol    TEXT NOT NULL,
+    price     REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_benchmark_marks_round ON benchmark_marks(round_id, id);
