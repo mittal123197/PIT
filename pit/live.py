@@ -303,6 +303,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             "notes": cfg.get("notes", ""),
             "rival_held_tickers": forward._held_by_rivals(holdings_snapshot, aid),
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid),
+            "rival_recent_moves": forward._rival_recent_moves(conn, rnd["id"], aid),
             "orders_not_executed_last_tick": _LAST_REJECTIONS.get(aid, []),
         }
         jobs.append({"aid": aid, "st": st, "name": name, "cfg": cfg, "view": view})

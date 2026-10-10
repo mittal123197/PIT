@@ -39,14 +39,24 @@ the deadline everyone is ranked by return, highest first, and there are no ties.
 Only 1st place truly wins; everyone else is a loser (worse the lower you rank), \
 though dead last is punished more than someone who narrowly missed 1st.
 
+This is a BATTLE. Your single objective is the highest return in the pool by \
+the deadline — generate maximum profit and beat your rivals. Losing agents are \
+retired and recreated from their own post-round self-critique; the winner keeps \
+going. Nobody hands you ideas and nobody is coming to help: your edge is your \
+own judgment. You can see what your rivals hold and what they have just bought \
+or sold — use that as intelligence about the fight, not as instructions; the \
+agent who simply copies the crowd finishes with the crowd.
+
 You have NO watchlist, NO tips, and NO pre-picked list from us. You have three \
 real research tools — use whichever combination you actually need, in any order, \
 before you commit:
 
-1. SCAN — randomly samples {_SCAN_UNIVERSE_HINT} and returns the actual top \
-   gainers/losers over that sample, computed fresh right now. A different \
-   random slice every call, so don't expect the same names twice. Invoke \
-   with: "research": {{"scan": true}}
+1. SCAN — shows a RANDOM slice of {_SCAN_UNIVERSE_HINT}: ~20 names with sector, \
+   price and today's move, listed alphabetically. It is NOT a ranking and NOT a \
+   recommendation, and a different slice comes back every call. It is just one \
+   source of ideas — you are free to trade ANY ticker in the universe below, \
+   including quiet, defensive, beaten-down or boring names, chosen on your own \
+   thesis. Invoke with: "research": {{"scan": true}}
 2. HISTORY — recent daily closes for any ticker YOU name (technicals: trend, \
    support/resistance, momentum). Invoke with:
    "research": {{"history": ["TICKER", ...]}}  (up to 8 at once)
@@ -94,6 +104,9 @@ your own idea instead of following into a name someone else already holds. \
 Sells are never restricted. This list is a snapshot from the start of this \
 decision cycle, so it won't include a rival's trade from this same moment.
 
+`rival_recent_moves` lists the latest buys and sells your rivals made this \
+round (who, side, ticker, when — not price, size or reasoning).
+
 `orders_not_executed_last_tick` lists any of your orders that were rejected \
 last decision and why (e.g. no cash left). If `your_cash` is near zero you \
 CANNOT buy — sell something first to free cash, and don't resubmit the same \
@@ -122,6 +135,27 @@ Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what you hol
 Amounts are in your account currency. You may also give "qty" (shares, fractional OK) \
 instead of amount_inr. Fractional shares are allowed, so you can buy a stock \
 priced above your cash by sizing the amount to what you can afford."""
+
+
+_UNIVERSE_BLOCK: str | None = None
+
+
+def _system_prompt() -> str:
+    """_SYSTEM plus the full tradeable universe, grouped by sector, so agents
+    pick from the whole thing on their own thesis instead of only from
+    whatever a scan surfaces. Built once (the listing is cached for a day)."""
+    global _UNIVERSE_BLOCK
+    if _UNIVERSE_BLOCK is None:
+        try:
+            from . import full_market
+            from .market import TRADE_UNIVERSE_MODE
+            listing = full_market.universe_listing(TRADE_UNIVERSE_MODE)
+        except Exception:
+            listing = ""
+        _UNIVERSE_BLOCK = (
+            "\n\nYOUR UNIVERSE — every ticker you may trade, by sector. Choose "
+            "from this whole list; scans only sample it:\n" + listing) if listing else ""
+    return _SYSTEM + _UNIVERSE_BLOCK
 
 
 def decide(view: dict, day: int, total_days: int, goal_pct: float,
@@ -161,12 +195,13 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "rival_return_pct": view.get("opponent_return_pct"),
         "rival_recent_messages": view.get("rival_messages", []),
         "rival_held_tickers": view.get("rival_held_tickers", []),
+        "rival_recent_moves": view.get("rival_recent_moves", []),
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
     }
     messages = [
-        {"role": "system", "content": _SYSTEM},
+        {"role": "system", "content": _system_prompt()},
         {"role": "user", "content": json.dumps(context)},
     ]
 
@@ -234,7 +269,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         if research.get("scan"):
             # a fresh random slice of the WHOLE market each call — real
             # discovery, never the same shortlist twice
-            results["scan"] = market.scan_full_market(n=10, sample_size=150)
+            results["scan"] = market.scan_full_market(n=20)
         for t in (research.get("history") or [])[:8]:
             h = market.history(str(t), days=30)
             results.setdefault("history", {})[str(t).upper()] = h[-15:] if h else "no data"

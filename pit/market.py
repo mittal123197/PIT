@@ -149,23 +149,39 @@ def is_trading_day(date: datetime.date | None = None) -> bool:
     return date.weekday() < 5
 
 
-def scan_full_market(n: int = 12, sample_size: int = 150,
+def scan_full_market(n: int = 20, sample_size: int | None = None,
                      seed: int | None = None) -> dict:
-    """Real discovery: rank actual price movement over a random sample drawn
-    from the ENTIRE US-listed market (thousands of tickers), not a hand-picked
-    shortlist. This is what makes an agent's first move data-driven instead of
-    "recall a famous name from training data" — see full_market.py."""
+    """A NEUTRAL look at a random slice of the universe: `n` randomly chosen
+    names with their sector, current price and today's move, listed
+    alphabetically — deliberately NOT ranked by performance. The old version
+    returned the sample's top gainers/losers, which funnelled every agent
+    into the same few day-movers (all three buying whatever was +11% that
+    morning). A random slice is just a prompt for ideas; agents are expected
+    to choose from the whole universe (listed in their system prompt) on
+    their own thesis."""
     from . import full_market
-    sample = full_market.random_sample(sample_size, seed=seed,
+    sample = full_market.random_sample(sample_size or n, seed=seed,
                                        mode=TRADE_UNIVERSE_MODE)
     if not sample:
-        return {"gainers": [], "losers": [],
-                "note": "full-market universe unreachable; ticker discovery "
-                        "unavailable this call"}
-    result = _yf_movers(n, reference=sample)
-    result["universe_size"] = full_market.universe_size(TRADE_UNIVERSE_MODE)
-    result["sampled"] = len(sample)
-    return result
+        return {"sample": [],
+                "note": "universe unreachable; use your own knowledge of the "
+                        "universe listed in your instructions"}
+    info = full_market.sector_map(TRADE_UNIVERSE_MODE)
+    try:
+        df = _movers_download(sample, "7d", "1d", 15)
+        prices = _extract_closes(df, sample)
+    except Exception:
+        prices = {}
+    rows = []
+    for t in sorted(prices):
+        price, prev = prices[t]
+        rows.append({"ticker": t, "sector": info.get(t, ("", ""))[1],
+                     "price": _round_price(price),
+                     "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0})
+    return {"sample": rows,
+            "note": "random slice, alphabetical, NOT ranked — one source of ideas, "
+                    "not a recommendation",
+            "universe_size": full_market.universe_size(TRADE_UNIVERSE_MODE)}
 
 
 # ---- Alpaca backend (real-time US via IEX) ----------------------------

@@ -246,28 +246,20 @@ def _price_at(series: list[tuple[datetime, float]], now: datetime) -> float:
     return price if price is not None else series[0][1]
 
 
-def _replay_scan(n: int = 12, sample_size: int = 150,
+def _replay_scan(n: int = 20, sample_size: int | None = None,
                  seed: int | None = None) -> dict:
-    """scan_full_market, but sourced from the REPLAY day, not today — so an
-    agent's discovery stays inside the timeline it's actually trading in.
-    A random sample each call, same as the live version."""
+    """Neutral random slice (alphabetical, NOT ranked by performance) of the
+    universe, priced at the REPLAY clock — same shape as market.scan_full_market."""
     from . import full_market
     from .market import TRADE_UNIVERSE_MODE
     day = _STATE.get("day")
     if not day:
-        return {"gainers": [], "losers": [], "note": "replay not active"}
-    sample = full_market.random_sample(sample_size, seed=seed,
+        return {"sample": [], "note": "replay not active"}
+    sample = full_market.random_sample(sample_size or n, seed=seed,
                                        mode=TRADE_UNIVERSE_MODE)
     if not sample:
-        return {"gainers": [], "losers": [],
-                "note": "full-market universe unreachable this call"}
+        return {"sample": [], "note": "universe unreachable this call"}
     cache = _STATE.setdefault("series", {})
-    # Every agent scans its own independent random sample each tick, and
-    # those samples overlap heavily by chance (150 of ~500 names, drawn 3x a
-    # tick) — re-downloading a ticker another agent already fetched THIS
-    # replay just adds pointless load that's part of what was tripping
-    # Yahoo's throttling. A ticker's whole day of bars is already final and
-    # cached the first time it's loaded, so reusing it is exact, not stale.
     to_fetch = [t for t in sample if t not in cache and t not in _STATE.get("missing", set())]
     fetched = _load_tickers(to_fetch, day) if to_fetch else {}
     for t, series in fetched.items():
@@ -277,18 +269,20 @@ def _replay_scan(n: int = 12, sample_size: int = 150,
     if _STATE.get("start_wall") is None and got:
         first = next(iter(got.values()))
         _anchor_clock(first[0][0], first[-1][0])
-
+    info = full_market.sector_map(TRADE_UNIVERSE_MODE)
     now = sim_now()
     rows = []
-    for t, series in got.items():
+    for t in sorted(got):
+        series = got[t]
         if len(series) < 2 or not now:
             continue
         price = _price_at(series, now)
         first_price = series[0][1]
         if first_price:
-            rows.append({"ticker": t, "price": market._round_price(price),
-                        "change_pct": round((price / first_price - 1) * 100, 2)})
-    rows.sort(key=lambda r: r["change_pct"], reverse=True)
-    return {"gainers": rows[:n], "losers": list(reversed(rows[-n:])),
-            "universe_size": full_market.universe_size(TRADE_UNIVERSE_MODE),
-            "sampled": len(sample)}
+            rows.append({"ticker": t, "sector": info.get(t, ("", ""))[1],
+                         "price": market._round_price(price),
+                         "change_pct": round((price / first_price - 1) * 100, 2)})
+    return {"sample": rows,
+            "note": "random slice, alphabetical, NOT ranked — one source of ideas, "
+                    "not a recommendation",
+            "universe_size": full_market.universe_size(TRADE_UNIVERSE_MODE)}

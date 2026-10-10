@@ -163,3 +163,25 @@ def random_sample(n: int = 150, seed: int | None = None,
 
 def universe_size(mode: str = "full") -> int:
     return len(universe_for(mode))
+
+
+def sector_map(mode: str = "full") -> dict[str, tuple[str, str]]:
+    """{symbol: (name, sector)} for the chosen universe."""
+    return {r["symbol"]: (r.get("name", ""), r.get("sector", ""))
+            for r in universe_for(mode)}
+
+
+def universe_listing(mode: str = "top500") -> str:
+    """The tradeable universe as a compact sector-grouped listing, for the
+    agents' system prompt — so they know exactly what they're free to trade
+    and choose by their own thesis, not by whatever a scan happens to
+    surface. Empty for the unrestricted 'full' universe (thousands of
+    tickers is too many to list; agents then rely on the scan + their own
+    knowledge)."""
+    if mode == "full":
+        return ""
+    by_sector: dict[str, list[str]] = {}
+    for r in universe_for(mode):
+        by_sector.setdefault(r.get("sector") or "Other", []).append(r["symbol"])
+    return "\n".join(f"{sec}: {', '.join(sorted(syms))}"
+                     for sec, syms in sorted(by_sector.items()))

@@ -221,6 +221,7 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
             "rival_held_tickers": _held_by_rivals(holdings_snapshot, aid),
+            "rival_recent_moves": _rival_recent_moves(conn, rnd["id"], aid),
         }
         view["rival_messages"] = _recent_messages(conn, rnd["id"], aid)
         orders, notes, message, trace = autonomous.decide(
@@ -617,6 +618,29 @@ def _apply_lineage(conn, lid, ret, won, mult, flat_stake=None):
     conn.execute("""UPDATE lineages SET current_stake=?, cumulative_return_pct=?,
                  wins=wins+?, losses=losses+? WHERE id=?""",
                  (round(new_stake, 2), round(new_cum, 4), int(won), int(not won), lid))
+
+
+def _rival_recent_moves(conn, round_id, self_aid, limit=8) -> list[dict]:
+    """The latest buys/sells by the OTHER agents this round — who, side,
+    ticker, when. Deliberately no price, size or reasoning (same limits as
+    rival_held_tickers); round-end/forced closes are left out since they're
+    the arena acting, not a rival's decision."""
+    rows = conn.execute(
+        """SELECT t.ts, t.side, t.symbol, t.reason, l.name
+           FROM trades t JOIN agents a ON a.id=t.agent_id
+           JOIN lineages l ON l.id=a.lineage_id
+           WHERE t.round_id=? AND t.agent_id!=?
+           ORDER BY t.id DESC LIMIT ?""", (round_id, self_aid, limit * 3)).fetchall()
+    out = []
+    for r in rows:
+        reason = (r["reason"] or "")
+        if reason in ("round-end close", "stop-loss", "goal-hit") or reason.startswith("position stop"):
+            continue
+        out.append({"rival": r["name"], "side": r["side"], "ticker": r["symbol"],
+                    "at": r["ts"]})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _own_trades(conn, round_id, agent_id) -> list[dict]:
