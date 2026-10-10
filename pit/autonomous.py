@@ -134,7 +134,7 @@ Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
   "research": { "scan": true, "history": ["TICKER", ...], "fundamentals": ["TICKER", ...] },
-  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"stop_loss_pct":N,"reason":"..."} ],
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"reason":"..."} ],
   "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
   "done": true|false,
   "notes": "carry-forward notes to your future self"
@@ -143,7 +143,7 @@ Set done=false and fill "research" to gather data first (you'll be called again 
 with the results). Set done=true with your "orders" (and a "message") to act. \
 Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what you hold. \
 Amounts are in your account currency. You may also give "qty" (shares, fractional OK) \
-instead of amount_inr. Fractional shares are allowed, so you can buy a stock \
+instead of amount. Fractional shares are allowed, so you can buy a stock \
 priced above your cash by sizing the amount to what you can afford."""
 
 
@@ -164,7 +164,7 @@ decision per wake-up, then sleep until the next one (several minutes).
 _BRIEF_FORMAT = """Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
-  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"stop_loss_pct":N,"reason":"..."} ],
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"reason":"..."} ],
   "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
   "done": true,
   "notes": "carry-forward notes to your future self"
@@ -172,7 +172,7 @@ _BRIEF_FORMAT = """Respond ONLY with JSON of this shape:
 Set done=true always — this is your one decision for this wake-up; use an empty \
 "orders" list to hold. Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what \
 you hold. Amounts are in your account currency. You may also give "qty" (shares, \
-fractional OK) instead of amount_inr."""
+fractional OK) instead of amount."""
 
 
 def _system_prompt_brief() -> str:
@@ -370,8 +370,9 @@ def _clean_orders(orders: list) -> list[dict]:
                 continue
             entry = {"ticker": str(o["ticker"]).upper().strip(), "side": side,
                      "reason": str(o.get("reason", ""))[:160]}
-            if "amount_inr" in o and o["amount_inr"]:
-                entry["amount_inr"] = float(o["amount_inr"])
+            amt = o.get("amount") or o.get("amount_inr")   # old name still accepted
+            if amt:
+                entry["amount"] = float(amt)
             if "qty" in o and o["qty"]:
                 entry["qty"] = float(o["qty"])
             if side == "buy" and o.get("stop_loss_pct") not in (None, ""):
@@ -379,7 +380,7 @@ def _clean_orders(orders: list) -> list[dict]:
                     entry["stop_loss_pct"] = float(o["stop_loss_pct"])
                 except (TypeError, ValueError):
                     pass   # unparseable -> default stop applies
-            if "amount_inr" in entry or "qty" in entry:
+            if "amount" in entry or "qty" in entry:
                 out.append(entry)
         except (KeyError, ValueError, TypeError):
             continue

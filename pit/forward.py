@@ -69,16 +69,28 @@ AUTONOMOUS_SEED = [
 
 def ensure_autonomous_lineages(conn: sqlite3.Connection,
                                config: ArenaConfig = DEFAULT) -> list[int]:
-    ids = [r["id"] for r in conn.execute(
-        "SELECT id FROM lineages ORDER BY id").fetchall()]
-    if len(ids) >= len(AUTONOMOUS_SEED):
-        return ids
     have = {r["name"] for r in conn.execute("SELECT name FROM lineages")}
     for name, cfg in AUTONOMOUS_SEED:
         if name not in have:
             _create_lineage(conn, name, cfg, config)
+    _sync_models(conn)
     return [r["id"] for r in conn.execute(
         "SELECT id FROM lineages ORDER BY id").fetchall()]
+
+
+def _sync_models(conn) -> None:
+    """The model is stored on each agent (and carried to its successors), so
+    a changed PIT_<NAME>_MODEL in .env would otherwise never take effect for
+    an existing pool. The configured model wins at every round start."""
+    want = dict((n, c["model"]) for n, c in AUTONOMOUS_SEED)
+    for r in conn.execute("""SELECT l.name, a.id, a.strategy_config FROM lineages l
+                             JOIN agents a ON a.id = l.current_agent_id""").fetchall():
+        cfg = json.loads(r["strategy_config"] or "{}")
+        if r["name"] in want and cfg.get("model") != want[r["name"]]:
+            cfg["model"] = want[r["name"]]
+            conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
+                         (json.dumps(cfg), r["id"]))
+    conn.commit()
 
 
 def _create_lineage(conn, name, cfg, config) -> int:
@@ -282,6 +294,11 @@ def _stop_pct_for(order: dict, default: float) -> float:
 MIN_ORDER_USD = 1.0
 
 
+def _amount(o: dict) -> float | None:
+    """Order size in account currency ("amount"; "amount_inr" is the old name)."""
+    return o.get("amount") or o.get("amount_inr")
+
+
 def _floor_qty(x: float) -> float:
     """Floor to 4 decimals (fractional shares) — never rounds UP, so a buy
     can't exceed the cash/budget it was sized from."""
@@ -322,10 +339,10 @@ def _execute(conn, round_id, agent_id, st, orders, price, date,
             continue
         if o["side"] == "buy":
             if _scale is None:      # first buy: cash now includes this decision's sells
-                wants = sum((b.get("amount_inr") or (b.get("qty", 0) * (price(b["ticker"]) or 0)))
+                wants = sum((_amount(b) or (b.get("qty", 0) * (price(b["ticker"]) or 0)))
                             for b in orders if b.get("side") == "buy")
                 _scale = min(1.0, cash / wants) if wants > 0 else 1.0
-            budget = (o.get("amount_inr") or (o.get("qty", 0) * px)) * _scale
+            budget = (_amount(o) or (o.get("qty", 0) * px)) * _scale
             # Fractional shares: at a $1,000-scale stake, whole-share sizing
             # silently dropped every order for a stock priced above the
             # agent's budget (e.g. LITE at $1,114 vs a $560 budget -> 0
@@ -351,7 +368,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date,
         else:  # sell
             held = holdings.get(o["ticker"], 0.0)
             qty = _floor_qty(o.get("qty", held) if "qty" in o
-                             else (o.get("amount_inr", held * px) / px))
+                             else ((_amount(o) or held * px) / px))
             qty = min(qty, held)
             # selling (almost) the whole position closes it: flooring to 4
             # decimals otherwise strands dust (0.0001 shares) in holdings
