@@ -209,6 +209,7 @@
         <td>
           {% if p.resolution == 'accepted' and p.now == 'retired' %}<span class="pill status">adopted · retired</span>
           {% elif p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>
+          {% elif p.resolution == 'over_limit' %}<span class="pill status" title="won its vote, but only the best-supported rule is adopted each round">passed · over limit</span>
           {% elif p.resolution == 'rejected' %}<span class="pill lose">✕ rejected</span>
           {% else %}<span class="pill status">open</span>{% endif %}
         </td>

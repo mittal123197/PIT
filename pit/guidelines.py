@@ -582,8 +582,11 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
             r["accepted"], r["note"] = False, "passed but over this round's adoption limit"
         if r["accepted"]:
             _apply(conn, r["_p"])
+        res = ("accepted" if r["accepted"] else
+               "over_limit" if r.get("note") else "rejected")
         conn.execute("UPDATE guideline_proposals SET resolution=?, resolved_at=? WHERE id=?",
-                     ("accepted" if r["accepted"] else "rejected", _now(), r["proposal_id"]))
+                     (res, _now(), r["proposal_id"]))
+        r["resolution"] = res
         r.pop("_p")
     conn.commit()
     return results

@@ -224,7 +224,8 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
                 print(f"  {outcome['loser']} self-critiques: {outcome['mutation_note']}")
             for r in (outcome.get("reflections")
                       or ([outcome["reflection"]] if outcome.get("reflection") else [])):
-                verdict = "ADOPTED" if r["accepted"] else "rejected"
+                verdict = ("ADOPTED" if r["accepted"] else
+                           "passed, over this round's 1-rule limit" if r.get("note") else "rejected")
                 label = "DO" if r.get("practice", "good") == "good" else "AVOID"
                 who = f"{r['proposer']} proposes" if r.get("proposer") else "proposal"
                 print(f"  rulebook → {who} to {r['kind']} {label}: \"{r['text']}\" "
