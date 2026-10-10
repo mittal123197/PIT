@@ -235,7 +235,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
     def _log(turn, active_model, data, requested=None, results=None) -> None:
         trace.append({
             "turn": turn, "model": active_model,
-            "thoughts": str((data or {}).get("thoughts", ""))[:500],
+            "thoughts": str((data or {}).get("thoughts", ""))[:2000],
             "research_requested": requested,
             "research_results": results,
             "done": bool((data or {}).get("done")),

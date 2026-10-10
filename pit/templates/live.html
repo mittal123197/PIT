@@ -90,7 +90,8 @@
   <div class="panel" style="margin-bottom:0;border-color:{{ col if (loop.first and not tied_top) else 'var(--line)' }};">
     <h2 style="display:flex;justify-content:space-between;align-items:center;">
       <span><span class="dot" style="background:{{ col }};"></span>{{ a.name }}
-        <span class="mono muted" style="font-size:11px;font-weight:400;">#{{ loop.index }}</span></span>
+        <span class="mono muted" style="font-size:11px;font-weight:400;">#{{ loop.index }}</span>
+        {% if a.model_short %}<span class="mono muted" style="font-size:10.5px;font-weight:400;margin-left:6px;" title="{{ a.model }}">{{ a.model_short }}</span>{% endif %}</span>
       {% if loop.first and not tied_top %}<span class="pill gold">leading</span>{% endif %}
       {% if a.status == 'liquidated' %}<span class="pill lose">stopped out</span>{% endif %}
       {% if a.status == 'goal_hit' %}<span class="pill win">profit booked</span>{% endif %}
@@ -135,6 +136,18 @@
   </div>
   {% endfor %}
 </div>
+
+{% if data.crowding and data.crowding.shared %}
+<div class="panel" style="padding:12px 18px;margin-top:-12px;">
+  <div class="mono" style="font-size:12px;display:flex;flex-wrap:wrap;gap:6px 16px;align-items:baseline;">
+    <span title="share of the pool's invested dollars in names two or more agents hold — high means the agents are cloning each other, and the ranking comes down to sizing noise">
+      <span class="k muted">book overlap</span>
+      <b class="{{ 'down' if data.crowding.overlap_pct >= 60 else '' }}">{{ data.crowding.overlap_pct }}%</b></span>
+    <span class="muted">crowded:</span>
+    {% for sym, n in data.crowding.shared %}<span>{{ sym }} <span class="muted">{{ n }}/{{ data.crowding.n_agents }}</span></span>{% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="sec"><div class="eyebrow">Open positions</div>
   <div class="subtitle">What each agent is holding right now — entry price and how long held.

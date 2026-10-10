@@ -68,8 +68,10 @@ def _price(value) -> str:
     if value is None:
         return "—"
     v = abs(value)
-    if v >= 1:
+    if v >= 100:
         return f"{CURRENCY}{value:,.2f}"
+    if v >= 1:   # $1–$100 coins: 2 decimals hid every move (DOT "$1.25 -> $1.25, +0.06%")
+        return f"{CURRENCY}{value:,.4f}"
     return f"{CURRENCY}{value:.8f}".rstrip("0").rstrip(".") if v else f"{CURRENCY}0"
 
 

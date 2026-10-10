@@ -279,7 +279,8 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
     agents = _rows(conn.execute(
         """SELECT rs.agent_id, rs.starting_capital, rs.current_capital, rs.holdings,
                   rs.final_return_pct, rs.status, rs.trade_count,
-                  l.name, l.id AS lineage_id
+                  l.name, l.id AS lineage_id,
+                  json_extract(a.strategy_config, '$.model') AS model
            FROM round_states rs JOIN agents a ON a.id = rs.agent_id
            JOIN lineages l ON l.id = a.lineage_id WHERE rs.round_id=?""",
         (r["id"],)))
@@ -292,6 +293,8 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
         a["value"] = round(a["starting_capital"] * (1 + ret / 100), 2)
         a["ret"] = ret
     agents.sort(key=lambda x: x["ret"], reverse=True)
+    for a in agents:   # "deepseek:deepseek-v4-flash" -> "deepseek-v4-flash"
+        a["model_short"] = (a.get("model") or "").split(":", 1)[-1] if a.get("model") else ""
     # per-position live value + unrealized P&L from the last mark (no network)
     st_extra = {r["agent_id"]: r for r in _rows(conn.execute(
         "SELECT agent_id, cost_basis, mark_prices FROM round_states WHERE round_id=?",
@@ -334,6 +337,7 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
     return {"round": rd, "agents": agents, "messages": messages,
             "is_live": r["status"] == "live", "timing": timing,
             "race_svg": race_chart(series), "risk": _risk_bands(rd),
+            "crowding": _crowding(agents),
             "bench_name": bench["name"] if bench else None, "bench_now": bench_now}
 
 
@@ -391,6 +395,25 @@ def _session_timing(rd: dict) -> dict | None:
 def _fmt_secs(secs: float) -> str:
     secs = int(secs)
     return f"{secs // 60}m {secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+
+
+def _crowding(agents: list[dict]) -> dict:
+    """How alike the books are. Same-model agents fed the same rulebook can
+    converge on the same few names — then the 'battle' is decided by sizing
+    noise, not by different ideas. Overlap = the share of the pool's invested
+    dollars sitting in names two or more agents hold."""
+    by_sym: dict[str, list[str]] = {}
+    val: dict[str, float] = {}
+    for a in agents:
+        for p in a.get("positions") or []:
+            by_sym.setdefault(p["symbol"], []).append(a["name"])
+            val[p["symbol"]] = val.get(p["symbol"], 0.0) + (p.get("value") or 0.0)
+    total = sum(val.values())
+    shared = {s: n for s, n in by_sym.items() if len(n) >= 2}
+    return {"shared": sorted(((s, len(n)) for s, n in shared.items()),
+                             key=lambda x: (-x[1], -val[x[0]])),
+            "n_agents": len(agents),
+            "overlap_pct": round(sum(val[s] for s in shared) / total * 100) if total else 0}
 
 
 def _risk_bands(rd: dict) -> dict:
@@ -641,6 +664,7 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
             "entry_ts": first_ts, "held": _fmt_hold(_ts_seconds(first_ts), now),
             "reason": q[0].get("reason", ""),
         })
+    open_positions.sort(key=lambda p: (p["name"], -(p["qty"] * (p["now_price"] or p["avg_price"]))))
     return {"round_trips": round_trips, "open_positions": open_positions,
             "fills": rows}
 
