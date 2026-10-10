@@ -54,7 +54,10 @@ CREATE TABLE IF NOT EXISTS rounds (
     ends_at        TEXT,                 -- live sessions: planned end (local)
     interval_s     INTEGER,              -- live sessions: decision interval
     last_tick_at   TEXT,                 -- live sessions: last agent wake-up
-    market         TEXT                  -- e.g. "Crypto", "US top 100"
+    market         TEXT,                 -- e.g. "Crypto", "US top 100"
+    stop_pct       REAL,                 -- volatility-scaled portfolio stop
+    sigma_pct      REAL,                 -- expected 1-sigma move over the round
+    auto_stops     TEXT                  -- {symbol: default position stop %}
 );
 
 -- Per-agent-per-round mutable state (capital, holdings, risk tracking).
@@ -91,7 +94,8 @@ CREATE TABLE IF NOT EXISTS trades (
     price         REAL NOT NULL,
     fee           REAL NOT NULL DEFAULT 0.0,
     capital_after REAL NOT NULL,          -- cash after the fill
-    reason        TEXT                    -- optional rationale from the agent
+    reason        TEXT,                   -- optional rationale from the agent
+    features      TEXT                    -- data-table row seen at a buy (JSON)
 );
 
 -- Agent-registered price alerts. In Phase 1 the orchestrator evaluates these
@@ -159,7 +163,11 @@ CREATE TABLE IF NOT EXISTS guidelines (
     status      TEXT NOT NULL DEFAULT 'active',  -- active | retired
     version     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
-    retired_at  TEXT
+    retired_at  TEXT,
+    spec        TEXT,                    -- {"when": [[field, op, value], ...]}
+    evidence    TEXT,                    -- latest backtest against the ledger (JSON)
+    tier        TEXT,                    -- probation | proven
+    retired_reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS guideline_proposals (
@@ -172,7 +180,9 @@ CREATE TABLE IF NOT EXISTS guideline_proposals (
     resolution     TEXT,                  -- NULL (open) | accepted | rejected
     resolved_at    TEXT,
     created_at     TEXT NOT NULL,
-    proposer       TEXT                   -- lineage name that proposed it
+    proposer       TEXT,                  -- lineage name that proposed it
+    spec           TEXT,
+    evidence       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS guideline_votes (

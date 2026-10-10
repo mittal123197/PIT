@@ -34,8 +34,14 @@ def active_texts(conn) -> list[str]:
     """Labeled so an agent can tell a DO from an AVOID at a glance — this is
     the "leverage to check the guidelines" every decide() call gets: the full
     current list, right in its context, every single turn."""
-    return [f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}"
-            for g in active_guidelines(conn)]
+    out = []
+    for g in active_guidelines(conn):
+        line = f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}"
+        if g.get("spec"):
+            ev = json.loads(g["evidence"]) if g.get("evidence") else None
+            line += f"  [{g.get('tier') or 'probation'}; {evidence_label(ev)}]"
+        out.append(line)
+    return out
 
 
 def current_lineages(conn) -> list[dict]:
@@ -270,20 +276,25 @@ def open_and_resolve(conn, config: ArenaConfig, source_round_id: int | None,
     }
 
 
-def _apply(conn, proposal: dict) -> None:
+def _apply(conn, proposal: dict, tier: str | None = None,
+           ledger: dict | None = None) -> None:
     if proposal["kind"] == "add":
         version = conn.execute(
             "SELECT COALESCE(MAX(version),0)+1 v FROM guidelines"
         ).fetchone()["v"]
         conn.execute(
-            "INSERT INTO guidelines (text, practice, status, version, created_at) "
-            "VALUES (?, ?, 'active', ?, ?)",
-            (proposal["text"], proposal.get("practice", "good"), version, _now()),
+            "INSERT INTO guidelines (text, practice, status, version, created_at, "
+            "spec, evidence, tier) VALUES (?, ?, 'active', ?, ?, ?, ?, ?)",
+            (proposal["text"], proposal.get("practice", "good"), version, _now(),
+             json.dumps(proposal["spec"]) if proposal.get("spec") else None,
+             json.dumps(ledger) if ledger else None, tier),
         )
     else:  # remove
         conn.execute(
-            "UPDATE guidelines SET status='retired', retired_at=? WHERE id=?",
-            (_now(), proposal["guideline_id"]),
+            "UPDATE guidelines SET status='retired', retired_at=?, retired_reason=? "
+            "WHERE id=?",
+            (_now(), f"voted out (proposed by {proposal.get('proposer', '?')})",
+             proposal["guideline_id"]),
         )
 
 
@@ -437,33 +448,213 @@ def _round_trades(conn, round_id, lineage_id) -> list[dict]:
     return rows
 
 
+# ---- evidence-checked rules ----------------------------------------------
+#
+# Why: with every agent on the same small model, the vote was a rubber stamp —
+# every proposal got 3/3, however vague or wrong. Asking the model to be "more
+# skeptical" didn't change that. So the vote no longer stands alone:
+#
+#  1. A rule must be MACHINE-CHECKABLE: an entry rule over the data-table
+#     columns ("DO: buy when RSI14 < 30", "AVOID: buying when 1d% > 8").
+#     Vague, ticker-specific or arena-mechanics rules can't even be expressed.
+#  2. The ARENA backtests it against the pool's real ledger: every logged buy
+#     carries the table row the agent saw (trades.features) and its realised
+#     outcome. Buys matching the condition vs. buys that didn't.
+#  3. Evidence gates the vote: contradicted -> rejected without a vote;
+#     supported -> a majority of the pool adopts it; untested or inconclusive
+#     -> needs every other agent too, and enters on probation.
+#  4. Every round all active rules are re-tested; a rule the ledger turns
+#     against is retired automatically, a probation rule the data backs
+#     becomes proven. The rulebook is kept honest by outcomes, not opinions.
+
+_OPS = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
+        ">": lambda a, b: a > b, ">=": lambda a, b: a >= b}
+
+
+def _min_trades() -> int:
+    import os
+    return int(os.getenv("PIT_RULE_MIN_TRADES", "5"))
+
+
+_T_SUPPORT = 1.0   # |t| at which the ledger counts as taking a side
+
+
+def _rule_fields() -> dict:
+    from .brief import RULE_FIELDS
+    return RULE_FIELDS
+
+
+def parse_spec(when) -> dict | None:
+    """[{"field","op","value"}, ...] or [[f, op, v], ...] -> {"when": [[f, op, v]]}
+    — 1 to 3 conditions over the data-table columns, else None."""
+    fields = _rule_fields()
+    if not isinstance(when, list) or not 1 <= len(when) <= 3:
+        return None
+    out = []
+    for c in when:
+        if isinstance(c, dict):
+            c = [c.get("field"), c.get("op"), c.get("value")]
+        if not isinstance(c, (list, tuple)) or len(c) != 3:
+            return None
+        f, op, v = str(c[0]).strip(), str(c[1]).strip(), c[2]
+        if f not in fields or op not in _OPS:
+            return None
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        out.append([f, op, v])
+    return {"when": out}
+
+
+def spec_text(spec: dict, practice: str) -> str:
+    cond = " and ".join(f"{f} {op} {v:g}" for f, op, v in spec["when"])
+    return f"buy when {cond}" if practice == "good" else f"buying when {cond}"
+
+
+def _matches(spec: dict, feat: dict) -> bool | None:
+    fields = _rule_fields()
+    for f, op, v in spec["when"]:
+        x = feat.get(fields[f])
+        if x is None:
+            return None
+        if not _OPS[op](float(x), v):
+            return False
+    return True
+
+
+def buy_outcomes(conn, round_id: int | None = None,
+                 lineage_id: int | None = None) -> list[dict]:
+    """Every logged buy with the data row seen at entry and its realised
+    return %: exit = qty-weighted price of that agent's later sells of the
+    symbol in the same round (forced closes included — that's the real P&L),
+    else the last mark if still open."""
+    q = """SELECT t.id, t.round_id, t.agent_id, t.symbol, t.price, t.features
+           FROM trades t JOIN agents a ON a.id = t.agent_id
+           WHERE t.side='buy' AND t.features IS NOT NULL"""
+    args: list = []
+    if round_id is not None:
+        q += " AND t.round_id=?"
+        args.append(round_id)
+    if lineage_id is not None:
+        q += " AND a.lineage_id=?"
+        args.append(lineage_id)
+    out = []
+    for b in conn.execute(q + " ORDER BY t.id", args).fetchall():
+        sells = conn.execute(
+            """SELECT qty, price FROM trades WHERE round_id=? AND agent_id=?
+               AND symbol=? AND side='sell' AND id>?""",
+            (b["round_id"], b["agent_id"], b["symbol"], b["id"])).fetchall()
+        qty = sum(r["qty"] for r in sells)
+        if qty > 0:
+            exit_px = sum(r["qty"] * r["price"] for r in sells) / qty
+        else:
+            m = conn.execute("SELECT mark_prices FROM round_states WHERE round_id=? "
+                             "AND agent_id=?", (b["round_id"], b["agent_id"])).fetchone()
+            exit_px = json.loads((m and m["mark_prices"]) or "{}").get(b["symbol"])
+        if not exit_px or not b["price"]:
+            continue
+        out.append({"symbol": b["symbol"], "features": json.loads(b["features"]),
+                    "ret": (exit_px / b["price"] - 1) * 100})
+    return out
+
+
+def backtest(spec: dict, practice: str, outcomes: list[dict]) -> dict:
+    """Matching buys vs. the rest. For a DO, matching buys must have done
+    better; for an AVOID, worse. t = signed Welch statistic of that edge."""
+    import math
+    import statistics as stx
+    m, o = [], []
+    for r in outcomes:
+        hit = _matches(spec, r["features"])
+        if hit is True:
+            m.append(r["ret"])
+        elif hit is False:
+            o.append(r["ret"])
+    ev = {"n_match": len(m), "n_other": len(o),
+          "avg_match": round(stx.mean(m), 3) if m else None,
+          "avg_other": round(stx.mean(o), 3) if o else None,
+          "win_rate_match": round(sum(x > 0 for x in m) / len(m) * 100) if m else None}
+    n = _min_trades()
+    if len(m) < n or len(o) < n:
+        ev.update(t=None, verdict="untested")
+        return ev
+    se = math.sqrt(stx.variance(m) / len(m) + stx.variance(o) / len(o)) or 1e-9
+    edge = (stx.mean(m) - stx.mean(o)) * (1 if practice == "good" else -1)
+    t = round(edge / se, 2)
+    ev.update(t=t, verdict=("supported" if t >= _T_SUPPORT else
+                            "contradicted" if t <= -_T_SUPPORT else "inconclusive"))
+    return ev
+
+
+def evidence_label(ev: dict | None) -> str:
+    if not ev:
+        return "unverifiable (legacy free-text rule)"
+    if ev["verdict"] == "untested":
+        return (f"untested — {ev['n_match']} matching / {ev['n_other']} other buys "
+                f"so far, need {_min_trades()} each")
+    return (f"{ev['verdict']} — {ev['n_match']} matching buys avg {ev['avg_match']:+.2f}% "
+            f"(win {ev['win_rate_match']}%) vs {ev['n_other']} others avg "
+            f"{ev['avg_other']:+.2f}%, t={ev['t']:+.2f}")
+
+
+def review_rules(conn) -> list[dict]:
+    """Re-test every active rule against the ledger: retire the ones the data
+    now contradicts, promote probation rules it supports."""
+    outcomes = buy_outcomes(conn)
+    events = []
+    for g in active_guidelines(conn):
+        if not g.get("spec"):
+            continue
+        spec = json.loads(g["spec"])
+        ev = backtest(spec, g["practice"], outcomes)
+        conn.execute("UPDATE guidelines SET evidence=? WHERE id=?", (json.dumps(ev), g["id"]))
+        if ev["verdict"] == "contradicted":
+            conn.execute("UPDATE guidelines SET status='retired', retired_at=?, "
+                         "retired_reason=? WHERE id=?",
+                         (_now(), "ledger contradicts it: " + evidence_label(ev), g["id"]))
+            events.append({"action": "retired", "text": g["text"], "practice": g["practice"],
+                           "evidence": ev})
+        elif ev["verdict"] == "supported" and g.get("tier") != "proven":
+            conn.execute("UPDATE guidelines SET tier='proven' WHERE id=?", (g["id"],))
+            events.append({"action": "proven", "text": g["text"], "practice": g["practice"],
+                           "evidence": ev})
+    conn.commit()
+    return events
+
+
 def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = None,
-                   symbols: set[str] | None = None) -> dict | None:
+                   symbols: set[str] | None = None,
+                   my_buys: list[dict] | None = None) -> dict | None:
     cfg = _lineage_cfg(lin)
+    fields = list(_rule_fields())
     data = _ask_json(cfg.get("model"),
         "You are a trading agent helping write your pool's shared rulebook. JSON only.",
         {"you": lin["name"], "your_record": f"{lin['wins']}W-{lin['losses']}L",
          "your_notes_from_your_own_trades": cfg.get("notes", ""),
          "your_trades_last_round": trades or [],
+         "your_buys_last_round_with_the_data_you_saw_and_outcome": [
+             {"symbol": b["symbol"], "outcome_pct": round(b["ret"], 3),
+              **{f: b["features"].get(k) for f, k in _rule_fields().items()}}
+             for b in (my_buys or [])][:20],
          "arena": ARENA_FACTS,
          "current_rules": [{"id": g["id"],
-                            "rule": f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}"}
+                            "rule": f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}",
+                            "evidence": evidence_label(json.loads(g["evidence"]) if g.get("evidence") else None)}
                            for g in active],
          "instruction": (
-             "Based ONLY on your own experience, propose at most ONE change to the "
-             "rulebook every agent in the pool will see: a good practice to DO, a "
-             "bad practice to AVOID, or removing a current rule your experience "
-             "contradicts. A rule must be GENERAL — it must apply to any stock or "
-             "coin, so NEVER name a ticker, coin or company. It must be concrete "
-             "and actionable: a decision rule of the form 'when <condition you can "
-             "read in the data table or your book>, <buy / sell / size / don't "
-             "buy>' — words like 'monitor' or 'consider' alone are not rules. ONE "
-             "idea in one sentence, possible in this arena (see arena facts), and not repeat "
-             "a current rule. Generic advice ('trade carefully') is useless. Most "
-             "rounds deserve no new rule — if nothing is clearly worth it, say "
-             "none. Return JSON "
-             "{\"kind\":\"add\"|\"remove\"|\"none\",\"practice\":\"good\"|\"bad\","
-             "\"text\":\"the rule, <=160 chars\",\"remove_id\":N,\"why\":\"...\"}")})
+             "Propose at most ONE change to the rulebook every agent will follow. "
+             "Rules are ENTRY rules over the data-table columns, and the arena "
+             "will BACKTEST yours against every buy the pool has logged — a rule "
+             "the data contradicts is rejected automatically, so propose only a "
+             "pattern your own buys above actually show. Either a DO (practice "
+             "'good': buying when the condition holds tends to work) or an AVOID "
+             "(practice 'bad': buying when it holds tends to lose). Conditions: "
+             f"1-3 of [field, op, value], field one of {fields}, op one of "
+             "<, <=, >, >=. Or remove a current rule your experience contradicts. "
+             "Most rounds deserve no new rule — say none if nothing is clear. "
+             "Return JSON {\"kind\":\"add\"|\"remove\"|\"none\",\"practice\":\"good\"|\"bad\","
+             "\"when\":[[\"RSI14\",\"<\",30]],\"remove_id\":N,\"why\":\"...\"}")})
     if not data or data.get("kind") not in ("add", "remove"):
         return None
     if data["kind"] == "remove":
@@ -477,20 +668,19 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
         g = ids[gid]
         return {"kind": "remove", "practice": g["practice"], "text": g["text"],
                 "guideline_id": gid, "proposer": lin["name"],
+                "spec": json.loads(g["spec"]) if g.get("spec") else None,
                 "evidence": str(data.get("why", ""))[:300]}
-    text, practice = _normalise_rule(str(data.get("text", "")),
-                                     "bad" if data.get("practice") == "bad" else "good")
-    if len(text) < 12 or _names_a_ticker(text, symbols or set()):
+    spec = parse_spec(data.get("when"))
+    if not spec:
         return None
-    if _vague(text) or _about_arena_mechanics(text):
-        return None
-    return {"kind": "add", "practice": practice,
-            "text": text[:200], "guideline_id": None, "proposer": lin["name"],
+    practice = "bad" if data.get("practice") == "bad" else "good"
+    return {"kind": "add", "practice": practice, "text": spec_text(spec, practice),
+            "spec": spec, "guideline_id": None, "proposer": lin["name"],
             "evidence": str(data.get("why", ""))[:300]}
 
 
 def _agent_vote(lin: dict, proposal: dict, active: list[str],
-                trades: list[dict] | None = None) -> tuple[str, str]:
+                trades: list[dict] | None = None, ledger: dict | None = None) -> tuple[str, str]:
     cfg = _lineage_cfg(lin)
     label = "DO" if proposal.get("practice") == "good" else "AVOID"
     data = _ask_json(cfg.get("model"),
@@ -501,104 +691,137 @@ def _agent_vote(lin: dict, proposal: dict, active: list[str],
          "arena": ARENA_FACTS,
          "current_rules": active,
          "proposal": (f"{proposal['kind'].upper()} rule — {label}: {proposal['text']}"),
+         "proposer_says": proposal.get("evidence", ""),
+         "arena_backtest_on_all_logged_buys": evidence_label(ledger) if ledger else
+             "not applicable",
          "instruction": (
-             "This rule would bind every agent, including you, from now on — a bad "
-             "rule costs everyone. Be a skeptic: most proposals should be "
-             "rejected. Agree ONLY if you can point to something specific in your "
-             "own trades where following it would have improved your result. "
-             "Disagree if it is vague, obvious, already covered, impossible in this "
-             "arena, or not supported by your own experience. Return JSON "
+             "This rule would bind every agent, including you. The arena backtest "
+             "above is hard data from the pool's real trades — weigh it above the "
+             "proposer's story. 'untested' means too few trades to tell: then agree "
+             "only if your own trades clearly back it. 'inconclusive' means the data "
+             "shows no real edge. Disagree if it would have hurt your own trades or "
+             "duplicates a current rule. Return JSON "
              "{\"evidence_from_my_trades\":\"...\",\"vote\":\"agree\"|\"disagree\","
              "\"reason\":\"<=200 chars\"}")})
     if not data or data.get("vote") not in ("agree", "disagree"):
         return "abstain", "no valid vote returned"
     ev = str(data.get("evidence_from_my_trades", "")).strip()
-    if data["vote"] == "agree" and len(ev) < 15:
-        return "disagree", "agreed without citing own evidence — counted as no"
     return data["vote"], (str(data.get("reason", "")) + (f" | evidence: {ev}" if ev else ""))[:300]
 
 
+def _spec_key(p: dict):
+    if p["kind"] == "remove":
+        return ("rm", p["guideline_id"])
+    return (p["practice"], json.dumps(sorted(p["spec"]["when"])))
+
+
 def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) -> list[dict]:
-    """Every agent may propose one rule change; every agent votes on each.
-    Returns one summary dict per proposal voted on (possibly empty)."""
+    """Re-test the rulebook, then every agent may propose one change; the
+    arena backtests each and the other agents vote with that evidence.
+    Returns one summary dict per proposal (plus review events under
+    "action")."""
     from concurrent.futures import ThreadPoolExecutor
     lineages = current_lineages(conn)
     if not lineages:
         return []
+    reviews = review_rules(conn)
     active = active_guidelines(conn)
     symbols = _universe_symbols()
     trades = {l["id"]: _round_trades(conn, source_round_id, l["id"]) for l in lineages}
+    my_buys = {l["id"]: (buy_outcomes(conn, source_round_id, l["id"])
+                         if source_round_id is not None else []) for l in lineages}
     with ThreadPoolExecutor(max_workers=len(lineages)) as ex:
-        raw = list(ex.map(lambda l: _agent_propose(l, active, trades[l["id"]], symbols),
-                          lineages))
+        raw = list(ex.map(lambda l: _agent_propose(l, active, trades[l["id"]], symbols,
+                                                   my_buys[l["id"]]), lineages))
 
-    seen = {_norm(g["text"]) for g in active}
-    proposals = []
+    seen = {(g["practice"], json.dumps(sorted(json.loads(g["spec"])["when"])))
+            for g in active if g.get("spec")}
+    proposals, keys = [], set()
     for p in raw:
         if not p:
             continue
-        key = ("rm", p["guideline_id"]) if p["kind"] == "remove" else _norm(p["text"])
-        if p["kind"] == "add" and key in seen:
+        k = _spec_key(p)
+        if (p["kind"] == "add" and k in seen) or k in keys:
             continue
-        if key in {(("rm", q["guideline_id"]) if q["kind"] == "remove" else _norm(q["text"]))
-                   for q in proposals}:
-            continue
+        keys.add(k)
         proposals.append(p)
 
+    outcomes = buy_outcomes(conn)
     results = []
     for p in proposals[:config.max_proposals_per_round]:
-        n_active = len(active_guidelines(conn))
-        if p["kind"] == "add" and n_active >= config.max_active_guidelines:
+        if p["kind"] == "add" and len(active_guidelines(conn)) >= config.max_active_guidelines:
             continue   # rulebook full — only removals can make room
+        ledger = backtest(p["spec"], p["practice"], outcomes) if p.get("spec") else None
         pid = conn.execute(
             """INSERT INTO guideline_proposals
                (kind, practice, guideline_id, proposed_text, source_round_id,
-                created_at, proposer)
-               VALUES (?,?,?,?,?,?,?)""",
+                created_at, proposer, spec, evidence)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
             (p["kind"], p["practice"], p.get("guideline_id"), p["text"],
-             source_round_id, _now(), p["proposer"])).lastrowid
+             source_round_id, _now(), p["proposer"],
+             json.dumps(p["spec"]) if p.get("spec") else None,
+             json.dumps(ledger) if ledger else None)).lastrowid
         conn.commit()
+        n_others = len(lineages) - 1
+        r = {"proposal_id": pid, "kind": p["kind"], "practice": p["practice"],
+             "text": p["text"], "proposer": p["proposer"], "evidence": p.get("evidence", ""),
+             "ledger": ledger, "agree": 1, "total": len(lineages), "accepted": False,
+             "_p": p}
+        results.append(r)
+        # the data vetoes first: an add the ledger contradicts, or removing a
+        # rule the ledger supports, never reaches a vote
+        verdict = (ledger or {}).get("verdict")
+        if (p["kind"] == "add" and verdict == "contradicted") or \
+           (p["kind"] == "remove" and verdict == "supported"):
+            r["note"] = "vetoed by the ledger: " + evidence_label(ledger)
+            continue
         texts = active_texts(conn)
-        # the proposer votes for its own proposal (no need to ask it); the
-        # others are asked — so a rule needs at least one OTHER agent's support
+
         def _v(l):
             if l["name"] == p["proposer"]:
                 return "agree", "proposer"
-            return _agent_vote(l, p, texts, trades[l["id"]])
+            return _agent_vote(l, p, texts, trades[l["id"]], ledger)
         with ThreadPoolExecutor(max_workers=len(lineages)) as ex:
             votes = list(ex.map(_v, lineages))
         for lin, (vote, reason) in zip(lineages, votes):
-            if vote == "abstain":
-                continue
-            conn.execute(
-                """INSERT OR REPLACE INTO guideline_votes
-                   (proposal_id, lineage_id, vote, reasoning, created_at)
-                   VALUES (?,?,?,?,?)""",
-                (pid, lin["id"], vote, reason, _now()))
-        agree = sum(1 for v, _ in votes if v == "agree")
-        # strict majority of the WHOLE pool — two abstentions can't let one
-        # agent's vote write a rule for everyone
-        passed = agree * 2 > len(lineages)
-        results.append({"proposal_id": pid, "kind": p["kind"], "practice": p["practice"],
-                        "text": p["text"], "proposer": p["proposer"],
-                        "evidence": p.get("evidence", ""), "agree": agree,
-                        "total": len(lineages), "accepted": passed, "_p": p})
-    # Rule inflation guard: adopt at most N per round — the ones with the most
-    # support (ties: whoever proposed first). Without it the 7B agents voted
-    # in nearly every proposal and the rulebook grew by ~3 rules a round.
-    winners = sorted((r for r in results if r["accepted"]),
-                     key=lambda r: -r["agree"])[:config.max_adoptions_per_round]
+            if vote != "abstain":
+                conn.execute(
+                    """INSERT OR REPLACE INTO guideline_votes
+                       (proposal_id, lineage_id, vote, reasoning, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (pid, lin["id"], vote, reason, _now()))
+        others = sum(1 for l, (v, _) in zip(lineages, votes)
+                     if v == "agree" and l["name"] != p["proposer"])
+        r["agree"] = others + 1
+        # Backed by the data: a strict majority of the whole pool (proposer
+        # included) adopts it. Not yet testable: EVERY other agent must agree,
+        # and it enters on probation until the ledger can judge it.
+        if p["kind"] == "add" and verdict != "supported":
+            r["required"] = f"all {n_others} other agents (no proven edge yet)"
+            r["accepted"] = others == n_others
+            r["tier"] = "probation"
+        else:
+            r["required"] = "a majority of the pool"
+            r["accepted"] = r["agree"] * 2 > len(lineages)
+            r["tier"] = "proven" if verdict == "supported" else None
+
+    # adopt at most N per round: proven edges first, then the strongest support
+    def _rank(r):
+        t = (r["ledger"] or {}).get("t") or 0
+        return (-(1 if (r["ledger"] or {}).get("verdict") == "supported" else 0), -t, -r["agree"])
+    winners = sorted((r for r in results if r["accepted"]), key=_rank)[:config.max_adoptions_per_round]
     keep = {r["proposal_id"] for r in winners}
     for r in results:
         if r["accepted"] and r["proposal_id"] not in keep:
             r["accepted"], r["note"] = False, "passed but over this round's adoption limit"
         if r["accepted"]:
-            _apply(conn, r["_p"])
+            _apply(conn, r["_p"], tier=r.get("tier"), ledger=r["ledger"])
         res = ("accepted" if r["accepted"] else
-               "over_limit" if r.get("note") else "rejected")
+               "over_limit" if "adoption limit" in r.get("note", "") else
+               "vetoed" if r.get("note") else "rejected")
         conn.execute("UPDATE guideline_proposals SET resolution=?, resolved_at=? WHERE id=?",
                      (res, _now(), r["proposal_id"]))
         r["resolution"] = res
         r.pop("_p")
     conn.commit()
-    return results
+    return results + reviews

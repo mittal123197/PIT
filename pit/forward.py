@@ -197,7 +197,7 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
                         f"per-position stop-loss")
             returns[aid] = (value(st) / st["starting_capital"] - 1) * 100
         # stop-loss / take-profit (both hard constraints, portfolio-level)
-        if returns[aid] <= -config.stop_loss_pct_for(rnd["length_days"]):
+        if returns[aid] <= -round_stop_pct(rnd, config):
             _liquidate(conn, rnd["id"], aid, st, price, date, reason="stop-loss")
             logs.append(f"{_name(conn, aid)} stopped out at {returns[aid]:.1f}%")
             continue
@@ -292,7 +292,19 @@ def _floor_qty(x: float) -> float:
     return math.floor(x * 10_000 + 1e-9) / 10_000
 
 
-def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
+def round_stop_pct(rnd, config) -> float:
+    """The round's portfolio stop: volatility-scaled when the session set one
+    (rounds.stop_pct, see pit/risk.py), else the flat sqrt(days) band."""
+    try:
+        v = rnd["stop_pct"]
+    except (KeyError, IndexError):
+        v = None
+    return v if v else config.stop_loss_pct_for(rnd["length_days"])
+
+
+def _execute(conn, round_id, agent_id, st, orders, price, date,
+             features: dict | None = None) -> int:
+    from . import risk
     n = 0
     rejected = []   # surfaced to the live console/page; used to be silent
     holdings = json.loads(st["holdings"])
@@ -338,7 +350,8 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
             # every buy carries a stop by default; the agent may set its own
             # distance (bounded) — a later buy of the same name can reset it
             if "stop_loss_pct" in o or o["ticker"] not in stop_pcts:
-                stop_pcts[o["ticker"]] = _stop_pct_for(o, DEFAULT.position_stop_loss_pct)
+                stop_pcts[o["ticker"]] = _stop_pct_for(
+                    o, risk.auto_stop(o["ticker"], DEFAULT.position_stop_loss_pct))
         else:  # sell
             held = holdings.get(o["ticker"], 0.0)
             qty = _floor_qty(o.get("qty", held) if "qty" in o
@@ -360,11 +373,12 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
             else:
                 holdings[o["ticker"]] = rem
                 # avg cost basis is unchanged by a partial sell
+        feat = (features or {}).get(o["ticker"]) if o["side"] == "buy" else None
         conn.execute(
             """INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty,
-               price, capital_after, reason) VALUES (?,?,?,?,?,?,?,?,?)""",
+               price, capital_after, reason, features) VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (round_id, agent_id, date, o["ticker"], o["side"], qty, px, cash,
-             o.get("reason", "")))
+             o.get("reason", ""), json.dumps(feat) if feat else None))
         n += 1
     st["current_capital"] = cash
     st["holdings"] = json.dumps(holdings)
@@ -644,7 +658,7 @@ def _resolve(conn, rnd, config, price) -> dict:
             # the agents propose and vote on rules themselves, each with its
             # own model and its own experience (guidelines.pool_constitution)
             reflections = gmod.pool_constitution(conn, config, rnd["id"])
-            reflection = reflections[0] if reflections else None
+            reflection = next((r for r in reflections if r.get("kind")), None)
         else:   # offline: deterministic stats heuristic
             reflection = gmod.open_and_resolve(conn, config, rnd["id"], use_llm=False)
             reflections = [reflection] if reflection else []

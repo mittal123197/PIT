@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from . import autonomous, brief as brief_mod, forward, market, replay
+from . import autonomous, brief as brief_mod, forward, market, replay, risk
 from . import guidelines as gmod
 from .config import CURRENCY, DEFAULT, MARKET, ArenaConfig
 
@@ -132,10 +132,13 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
     if not replay._STATE and brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
         brief_mod.prefetch_fundamentals(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
                                         verbose)
+    _set_risk_bands(conn, config, rnd, minutes, verbose)
     end = time.time() + minutes * 60
     conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=? WHERE id=?",
                  (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"),
                   int(interval), _market_label(), rnd["id"]))
+    conn.commit()
+    rnd = forward._active_round(conn)     # picks up ends_at + the risk bands
     for r in conn.execute("SELECT agent_id, final_return_pct FROM round_states "
                           "WHERE round_id=?", (rnd["id"],)).fetchall():
         conn.execute("INSERT INTO round_marks (round_id, agent_id, ts, return_pct) "
@@ -224,17 +227,76 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
                 print(f"  {outcome['loser']} self-critiques: {outcome['mutation_note']}")
             for r in (outcome.get("reflections")
                       or ([outcome["reflection"]] if outcome.get("reflection") else [])):
-                verdict = ("ADOPTED" if r["accepted"] else
-                           "passed, over this round's 1-rule limit" if r.get("note") else "rejected")
                 label = "DO" if r.get("practice", "good") == "good" else "AVOID"
+                if r.get("action"):     # re-test of an existing rule
+                    from .guidelines import evidence_label
+                    print(f"  rulebook → {label}: \"{r['text']}\" {r['action'].upper()} "
+                          f"by the ledger ({evidence_label(r['evidence'])})", flush=True)
+                    continue
+                verdict = ("ADOPTED" + (f" on {r['tier']}" if r.get("tier") else "")
+                           if r["accepted"] else
+                           r["note"] if r.get("note") else
+                           f"rejected — needed {r.get('required', 'a majority')}")
                 who = f"{r['proposer']} proposes" if r.get("proposer") else "proposal"
-                print(f"  rulebook → {who} to {r['kind']} {label}: \"{r['text']}\" "
-                      f"[{verdict}, {r['agree']}/{r['total']} agreed]", flush=True)
+                from .guidelines import evidence_label
+                bt = evidence_label(r["ledger"]) if r.get("ledger") else "no backtest"
+                print(f"  rulebook → {who} to {r['kind']} {label}: \"{r['text']}\"\n"
+                      f"      backtest: {bt}\n"
+                      f"      [{verdict}; {r['agree']}/{r['total']} agreed]", flush=True)
     else:
         outcome = None
     standings = _standings(conn, rnd, verbose)
     standings["outcome"] = outcome
     return standings
+
+
+def _risk_view(rnd, config) -> dict:
+    left = None
+    try:
+        if rnd["ends_at"]:
+            left = max(0, round((datetime.strptime(rnd["ends_at"], "%Y-%m-%d %H:%M:%S")
+                                 - datetime.now()).total_seconds() / 60, 1))
+    except (KeyError, IndexError, ValueError):
+        pass
+    return {"portfolio_stop_pct": forward.round_stop_pct(rnd, config),
+            "take_profit_pct": rnd["goal_pct"], "minutes_left": left,
+            "expected_1sigma_move_over_round_pct": _row_get(rnd, "sigma_pct")}
+
+
+def _row_get(row, key):
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def _set_risk_bands(conn, config, rnd, minutes, verbose) -> None:
+    """Size this round's stops and take-profit from its length and the
+    universe's real volatility (pit/risk.py). Without volatility data (replay,
+    or a universe with no brief) the flat config bands stay in force."""
+    risk.clear()
+    if replay._STATE or not brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
+        return
+    try:
+        b = brief_mod.get_brief(market.TRADE_UNIVERSE_MODE)
+    except Exception:
+        b = None
+    vols = {s: f.get("dvol") for s, f in ((b or {}).get("features") or {}).items()}
+    mkt = "crypto" if market.TRADE_UNIVERSE_MODE == "crypto" else "us"
+    bd = risk.bands(vols, minutes, mkt, config.risk_reward_ratio)
+    if not bd:
+        return
+    risk.set_round(minutes, mkt, vols)
+    conn.execute("UPDATE rounds SET stop_pct=?, goal_pct=?, sigma_pct=?, auto_stops=? "
+                 "WHERE id=?", (bd["stop"], bd["goal"], bd["sigma"],
+                                json.dumps(bd["auto_stops"]), rnd["id"]))
+    conn.commit()
+    if verbose:
+        st = sorted(bd["auto_stops"].values())
+        print(f"[risk] {minutes}-min round: typical move ±{bd['sigma']:.2f}% (1σ) → "
+              f"portfolio stop −{bd['stop']:.2f}%, take-profit +{bd['goal']:.2f}%, "
+              f"position stops {st[0]:.2f}–{st[-1]:.2f}% by asset volatility",
+              flush=True)
 
 
 def _refresh_marks(conn, config, rnd, verbose):
@@ -252,7 +314,7 @@ def _refresh_marks(conn, config, rnd, verbose):
         total = st["current_capital"] + sum(q * (price(t) or 0) for t, q in h.items())
         ret = (total / st["starting_capital"] - 1) * 100
         if st["status"] == "active":
-            stop = config.stop_loss_pct_for(rnd["length_days"])
+            stop = forward.round_stop_pct(rnd, config)
             goal = rnd["goal_pct"]
             hit_reason = "stop-loss" if ret <= -stop else "goal-hit" if ret >= goal else None
             if hit_reason:
@@ -321,7 +383,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             if verbose:
                 print(f"  {name}: {n_stopped} position(s) hit their per-position "
                       f"stop-loss", flush=True)
-        stop = config.stop_loss_pct_for(rnd["length_days"])
+        stop = forward.round_stop_pct(rnd, config)
         goal = rnd["goal_pct"]
         if returns[aid] <= -stop:
             forward._liquidate(conn, rnd["id"], aid, st, price, ts, reason="stop-loss")
@@ -344,11 +406,12 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
         positions = [{"ticker": t, "qty": q, "price": price(t),
                       "value": round(q * (price(t) or 0), 2),
                       "avg_entry": cb.get(t),
-                      "stop_pct": sp.get(t, config.position_stop_loss_pct),
-                      "stop_price": (round(cb[t] * (1 - sp.get(t, config.position_stop_loss_pct) / 100), 8)
+                      "stop_pct": sp.get(t, risk.auto_stop(t, config.position_stop_loss_pct)),
+                      "stop_price": (round(cb[t] * (1 - sp.get(t, risk.auto_stop(t, config.position_stop_loss_pct)) / 100), 8)
                                      if cb.get(t) else None)}
                      for t, q in holdings.items()]
         view = {
+            "risk": _risk_view(rnd, config),
             "cash": round(st["current_capital"], 2), "positions": positions,
             "total_value": round(value(st), 2), "return_pct": round(returns[aid], 2),
             "opponent_return_pct": round(
@@ -411,7 +474,8 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
         # earlier than the audit entries that produced them (and overstated
         # every position's "held" time).
         ts = forward.local_ts()
-        n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts)
+        n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts,
+                             features=(brief or {}).get("features"))
         _LAST_REJECTIONS[aid] = list(st.get("rejected_orders", []))
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",

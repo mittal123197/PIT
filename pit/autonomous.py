@@ -78,7 +78,9 @@ here is a strategy hint — the only rules are the hard ones below.
 Order mechanics: buys and sells execute immediately at the current price when \
 you decide. EVERY buy automatically carries a stop-loss: if that position later \
 falls a set % below your average entry it is sold for you, even while you \
-sleep. The default distance is """ + f"{DEFAULT.position_stop_loss_pct:g}" + """%; \
+sleep. The default distance is sized to each asset's own volatility over this \
+round's length (about 2x its typical move — the autoStop% column when you have \
+a data table; otherwise """ + f"{DEFAULT.position_stop_loss_pct:g}" + """%); \
 you may set your own per buy with "stop_loss_pct" (0.5–20) — tighter or looser \
 is your call. There are no limit or take-profit orders, and nothing else \
 persists between wake-ups. Each of your positions shows its entry and its \
@@ -86,7 +88,9 @@ stop distance.
 
 Hard rules, both enforced automatically (you don't have to act on them, but \
 you can't stop them): (1) a PORTFOLIO stop-loss liquidates your entire book if \
-its aggregate return falls too far. (2) each position's own stop-loss (above) force-sells \
+its aggregate return falls to `arena_risk.portfolio_stop_pct`, and a book \
+that reaches `arena_risk.take_profit_pct` is closed and its gain locked in \
+(both sized from this round's length and market volatility). (2) each position's own stop-loss (above) force-sells \
 that holding on its own the moment IT ALONE falls its stop % below what you \
 paid — independent of how the rest of your book is doing. Manage risk accordingly: \
 don't count on averaging down a loser before it hits its own stop.
@@ -259,6 +263,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
+        "arena_risk": view.get("risk"),
     }
     if brief:
         # one shared data table, one decision — no research loop

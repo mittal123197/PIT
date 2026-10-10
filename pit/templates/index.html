@@ -175,8 +175,12 @@
 
 <div class="sec"><div class="eyebrow">The constitution</div>
   <div class="subtitle">The rulebook every agent reads before each decision. After
-    every round each agent may propose one rule from its own trades; it takes a
-    majority of the whole pool to adopt it.</div></div>
+    every round each agent may propose one entry rule over the data table. The arena
+    backtests it on every logged buy: if the ledger contradicts it, it is vetoed
+    without a vote. If it shows an edge, a majority of the other agents adopts it.
+    With too few trades to tell, every other agent must agree and the rule enters on
+    probation. Rules are re-tested each round, and any rule the data turns against
+    is retired.</div></div>
 <div class="panel">
   <div style="padding:16px 20px;">
     {% if constitution.active %}
@@ -186,17 +190,24 @@
           <span class="pill gold">rule {{ loop.index }}</span>
           <span class="pill {{ 'win' if gl.practice == 'good' else 'lose' }}">
             {{ 'DO' if gl.practice == 'good' else 'AVOID' }}</span>
-          <span style="font-size:13.5px;">{{ gl.text }}</span>
+          <span style="font-size:13.5px;">{{ gl.text }}
+            {% if gl.spec %}<span class="pill {{ 'win' if gl.tier == 'proven' else 'status' }}" style="margin-left:6px;">{{ gl.tier or 'probation' }}</span>{% endif %}
+            {% if gl.ledger %}<div class="muted mono" style="font-size:11.5px;margin-top:3px;">{{ gl.ledger.label }}</div>{% endif %}</span>
         </div>
       {% endfor %}
     {% else %}
       <p class="muted" style="font-size:13px;margin:0;">
         No rules adopted yet — the pool proposes and votes as patterns emerge.</p>
     {% endif %}
+    {% for gl in constitution.retired if gl.retired_reason %}
+      {% if loop.first %}<div class="eyebrow" style="margin-top:14px;">Retired</div>{% endif %}
+      <div class="muted" style="font-size:12.5px;padding:4px 0;">
+        <s>{{ 'DO' if gl.practice == 'good' else 'AVOID' }}: {{ gl.text }}</s> — {{ gl.retired_reason }}</div>
+    {% endfor %}
   </div>
   {% if constitution.proposals %}
   <table>
-    <thead><tr><th>Proposal</th><th class="hide-sm">By</th><th>Type</th><th>Vote</th><th>Outcome</th></tr></thead>
+    <thead><tr><th>Proposal</th><th class="hide-sm">By</th><th>Type</th><th class="hide-sm">Backtest</th><th>Vote</th><th>Outcome</th></tr></thead>
     <tbody>
     {% for p in constitution.proposals %}
       <tr>
@@ -205,11 +216,14 @@
         <td><span class="pill status">{{ p.kind }}</span>
           <span class="pill {{ 'win' if p.practice == 'good' else 'lose' }}">
             {{ 'DO' if p.practice == 'good' else 'AVOID' }}</span></td>
+        <td class="hide-sm mono" style="font-size:11.5px;max-width:260px;white-space:normal;" title="{{ p.ledger.label if p.ledger else '' }}">
+          {% if p.ledger %}<span class="{{ 'up' if p.ledger.verdict == 'supported' else 'down' if p.ledger.verdict == 'contradicted' else 'muted' }}">{{ p.ledger.verdict }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="mono">{{ p.agree or 0 }}/{{ p.total or 0 }}</td>
         <td>
           {% if p.resolution == 'accepted' and p.now == 'retired' %}<span class="pill status">adopted · retired</span>
           {% elif p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>
           {% elif p.resolution == 'over_limit' %}<span class="pill status" title="won its vote, but only the best-supported rule is adopted each round">passed · over limit</span>
+          {% elif p.resolution == 'vetoed' %}<span class="pill lose" title="{{ p.ledger.label if p.ledger else '' }}">✕ vetoed by data</span>
           {% elif p.resolution == 'rejected' %}<span class="pill lose">✕ rejected</span>
           {% else %}<span class="pill status">open</span>{% endif %}
         </td>

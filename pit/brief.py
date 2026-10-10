@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import full_market, market
+from . import full_market, market, risk
 
 _FUND_PATH = Path(__file__).resolve().parent.parent / "data" / "fundamentals_cache.json"
 _FUND_TTL = 24 * 3600
@@ -98,6 +98,9 @@ def _technicals(close, volume) -> dict | None:
     out["v20"] = _pct(px, sma20)
     out["v50"] = _pct(px, float(close.iloc[-50:].mean())) if len(close) >= 50 else None
     out["rsi"] = _rsi14(close)
+    # 20-day std of daily returns (%) — drives the volatility-scaled stops
+    rets = close.pct_change().dropna().iloc[-20:]
+    out["dvol"] = round(float(rets.std()) * 100, 2) if len(rets) >= 10 else None
     hi, lo = float(close.iloc[-252:].max()), float(close.iloc[-252:].min())
     out["p52"] = round((px - lo) / (hi - lo) * 100) if hi > lo else None
     try:
@@ -123,7 +126,14 @@ def _download_daily(symbols: list[str]):
 # ---- the table -----------------------------------------------------------
 
 _HEADER = ("TICKER|sector|price|1d%|5d%|20d%|vs20dMA%|vs50dMA%|RSI14|52wk-pos%|"
-           "vol-x|fwdPE|margin%|revGr%|epsGr%|ROE%|D/E|analyst|tgt-upside%")
+           "vol-x|dayVol%|autoStop%|fwdPE|margin%|revGr%|epsGr%|ROE%|D/E|analyst|tgt-upside%")
+
+# the data-table columns an agent-written rule may test, -> technicals key.
+# Shared with guidelines.py so a rule's condition is checkable against the
+# exact numbers the agent saw when it traded.
+RULE_FIELDS = {"1d%": "d1", "5d%": "d5", "20d%": "d20", "vs20dMA%": "v20",
+               "vs50dMA%": "v50", "RSI14": "rsi", "52wk-pos%": "p52",
+               "vol-x": "volx", "dayVol%": "dvol"}
 
 
 def _f(v, nd=1):
@@ -141,6 +151,8 @@ def _row(sym: str, sector: str, t: dict, f: dict | None) -> str:
     return "|".join([
         sym, (sector or ".")[:11], price, _f(t["d1"], 2), _f(t["d5"]), _f(t["d20"]),
         _f(t["v20"]), _f(t["v50"]), _f(t["rsi"]), _f(t["p52"], 0), _f(t["volx"], 2),
+        _f(t.get("dvol"), 2),
+        _f(risk.auto_stop(sym, 0.0) or None, 2) if risk.active() else ".",
         _f(f.get("forward_pe")), _f(f.get("profit_margin_pct"), 0),
         _f(f.get("revenue_growth_pct"), 0), _f(f.get("earnings_growth_pct"), 0),
         _f(f.get("return_on_equity_pct"), 0), _f(f.get("debt_to_equity"), 0),
@@ -148,15 +160,27 @@ def _row(sym: str, sector: str, t: dict, f: dict | None) -> str:
 
 
 def get_brief(mode: str, max_age: float = 60.0) -> dict | None:
-    """{"text": table, "prices": {sym: px}, "n": count, "asof": ts} — cached
-    for `max_age` seconds, so every agent in a tick shares one build."""
+    """{"text": table, "prices": {sym: px}, "features": {sym: technicals},
+    "n": count, "asof": ts} — cached for `max_age` seconds, so every agent in
+    a tick shares one build. The text is re-rendered on every call (cheap) so
+    the autoStop% column follows the current round's risk settings."""
     now = time.time()
-    if _BRIEF["value"] and _BRIEF["mode"] == mode and now - _BRIEF["at"] < max_age:
-        return _BRIEF["value"]
+    if not (_BRIEF["value"] and _BRIEF["mode"] == mode and now - _BRIEF["at"] < max_age):
+        built = _build(mode)
+        if not built:
+            return None
+        _BRIEF.update(at=now, mode=mode, value=built)
+    v = _BRIEF["value"]
+    rows = [_row(s, sec, t, f) for s, sec, t, f in v["rows"]]
+    return {"text": _HEADER + "\n" + "\n".join(rows), "prices": v["prices"],
+            "features": v["features"], "n": len(rows), "asof": v["asof"]}
+
+
+def _build(mode: str) -> dict | None:
     symbols = symbols_for(mode)
     sectors = {r["symbol"]: r.get("sector", "") for r in full_market.universe_for(mode)}
     fund = _load_fund()
-    rows, prices = [], {}
+    rows, prices, features = [], {}, {}
     for df in _download_daily(symbols):
         close, vol = df["Close"], df["Volume"]
         for s in symbols:
@@ -166,11 +190,9 @@ def get_brief(mode: str, max_age: float = 60.0) -> dict | None:
             if not t:
                 continue
             prices[s] = t["px"]
-            rows.append(_row(s, sectors.get(s, ""), t, (fund.get(s) or {}).get("f")))
+            features[s] = {k: t.get(k) for k in RULE_FIELDS.values()}
+            rows.append((s, sectors.get(s, ""), t, (fund.get(s) or {}).get("f")))
     if not rows:
         return None
-    asof = time.strftime("%Y-%m-%d %H:%M:%S")
-    value = {"text": _HEADER + "\n" + "\n".join(rows), "prices": prices,
-             "n": len(rows), "asof": asof}
-    _BRIEF.update(at=now, mode=mode, value=value)
-    return value
+    return {"rows": rows, "prices": prices, "features": features,
+            "asof": time.strftime("%Y-%m-%d %H:%M:%S")}

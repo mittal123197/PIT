@@ -394,9 +394,20 @@ def _fmt_secs(secs: float) -> str:
 
 
 def _risk_bands(rd: dict) -> dict:
-    return {"stop": DEFAULT.stop_loss_pct_for(rd.get("length_days") or 0),
+    """Volatility-scaled bands when the session set them (pit/risk.py), else
+    the flat config bands."""
+    autos = {}
+    try:
+        autos = json.loads(rd.get("auto_stops") or "{}")
+    except Exception:
+        pass
+    vals = sorted(autos.values())
+    return {"stop": rd.get("stop_pct") or DEFAULT.stop_loss_pct_for(rd.get("length_days") or 0),
             "goal": rd.get("goal_pct"),
-            "position_stop": DEFAULT.position_stop_loss_pct}
+            "sigma": rd.get("sigma_pct"),
+            "scaled": bool(rd.get("stop_pct")),
+            "position_stop": DEFAULT.position_stop_loss_pct,
+            "pos_lo": vals[0] if vals else None, "pos_hi": vals[-1] if vals else None}
 
 
 def race_series(conn, round_id: int) -> list[dict]:
@@ -681,14 +692,29 @@ def guidelines_overview(conn: sqlite3.Connection) -> dict:
         "SELECT text, status FROM guidelines"))}
     proposals = _rows(conn.execute(
         """SELECT p.id, p.kind, p.practice, p.proposed_text, p.resolution,
-                  p.proposer, SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
+                  p.proposer, p.evidence, SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
            FROM guideline_proposals p
            LEFT JOIN guideline_votes v ON v.proposal_id = p.id
            GROUP BY p.id ORDER BY p.id DESC LIMIT 10"""))
     for p in proposals:
         # an adopted rule can be retired later — say so instead of a bare "adopted"
         p["now"] = status_by_text.get(p["proposed_text"]) if p["kind"] == "add" else None
+        p["ledger"] = _ledger(p.get("evidence"))
+    for g in active + retired:
+        g["ledger"] = _ledger(g.get("evidence"))
     return {"active": active, "retired": retired, "proposals": proposals}
+
+
+def _ledger(raw) -> dict | None:
+    """Backtest evidence as display bits: verdict + one-line summary."""
+    if not raw:
+        return None
+    from .guidelines import evidence_label
+    try:
+        ev = json.loads(raw)
+    except Exception:
+        return None
+    return {"verdict": ev.get("verdict"), "label": evidence_label(ev)}
 
 
 def sparkline(values: list[float], width: int = 120, height: int = 28) -> str:

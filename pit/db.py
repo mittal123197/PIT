@@ -72,6 +72,20 @@ _COLUMN_ADDITIONS = [
     # what was traded: "Crypto", "US top 100", "US replay · 2026-10-09", ...
     ("rounds", "market", "TEXT"),
     ("guideline_proposals", "proposer", "TEXT"),
+    # volatility-scaled risk bands for the round (see pit/risk.py)
+    ("rounds", "stop_pct", "REAL"),
+    ("rounds", "sigma_pct", "REAL"),
+    ("rounds", "auto_stops", "TEXT"),
+    # the data-table row the agent saw when it bought — lets the arena
+    # backtest a proposed rule's condition against real outcomes
+    ("trades", "features", "TEXT"),
+    # machine-checkable rules: {"when": [[field, op, value], ...]} + evidence
+    ("guidelines", "spec", "TEXT"),
+    ("guidelines", "evidence", "TEXT"),
+    ("guidelines", "tier", "TEXT"),
+    ("guidelines", "retired_reason", "TEXT"),
+    ("guideline_proposals", "spec", "TEXT"),
+    ("guideline_proposals", "evidence", "TEXT"),
 ]
 
 
