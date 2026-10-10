@@ -249,7 +249,11 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
 
     model = model or DEFAULT_MODEL
     context = {
-        "day": day, "total_days": total_days, "goal_pct": goal_pct,
+        # live sessions are time-based: `day` is just the decision count, which
+        # agents read as calendar days ("Day 9, 4 min left") — name it plainly
+        **({"decision_number": day} if not total_days else
+           {"day": day, "total_days": total_days}),
+        "goal_pct": goal_pct,
         "your_cash": view["cash"], "your_positions": view["positions"],
         "your_total_value": view["total_value"],
         "your_return_pct": view["return_pct"],

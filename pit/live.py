@@ -233,7 +233,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
                     print(f"  rulebook → {label}: \"{r['text']}\" {r['action'].upper()} "
                           f"by the ledger ({evidence_label(r['evidence'])})", flush=True)
                     continue
-                verdict = ("ADOPTED" + (f" on {r['tier']}" if r.get("tier") else "")
+                verdict = ("ADOPTED" + (f" as {r['tier']}" if r.get("tier") else "")
                            if r["accepted"] else
                            r["note"] if r.get("note") else
                            f"rejected — needed {r.get('required', 'a majority')}")
@@ -242,7 +242,8 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
                 bt = evidence_label(r["ledger"]) if r.get("ledger") else "no backtest"
                 print(f"  rulebook → {who} to {r['kind']} {label}: \"{r['text']}\"\n"
                       f"      backtest: {bt}\n"
-                      f"      [{verdict}; {r['agree']}/{r['total']} agreed]", flush=True)
+                      f"      [{verdict}" + ("; no vote held]" if r.get("resolution") == "vetoed"
+                                         else f"; {r['agree']}/{r['total']} agreed]"), flush=True)
     else:
         outcome = None
     standings = _standings(conn, rnd, verbose)
