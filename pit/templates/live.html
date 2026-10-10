@@ -138,7 +138,7 @@
 <div class="panel">
   <table>
     <thead><tr><th>Agent</th><th>Asset</th><th>Qty</th><th>Buy price</th>
-      <th>Now</th><th>P&amp;L</th><th>Held</th><th>Why it bought</th></tr></thead>
+      <th>Now</th><th>P&amp;L</th><th title="automatic stop-loss: sold if price falls to this level">Stop</th><th>Held</th><th>Why it bought</th></tr></thead>
     <tbody>
     {% for p in trades.open_positions %}
       <tr>
@@ -147,12 +147,14 @@
         <td class="mono">{{ p.qty|qty }}</td>
         <td class="mono">{{ p.avg_price|price }}</td>
         <td class="mono">{{ p.now_price|price if p.now_price else '—' }}</td>
-        <td class="mono {{ 'up' if (p.pnl_pct or 0) >= 0 else 'down' }}">{{ p.pnl_pct|pct if p.pnl_pct is not none else '—' }}</td>
+        <td class="mono {{ 'up' if (p.pnl_pct or 0) > -0.005 else 'down' }}">{{ p.pnl_pct|pct if p.pnl_pct is not none else '—' }}</td>
+        <td class="mono" style="white-space:nowrap;">{{ p.stop_price|price }}
+          <span class="muted" style="font-size:11px;">−{{ '%g'|format(p.stop_pct) }}%{% if p.now_price %} · {{ '%.1f'|format((p.now_price / p.stop_price - 1) * 100) }}% away{% endif %}</span></td>
         <td class="mono" style="white-space:nowrap;">{{ p.held }}</td>
         <td style="font-size:12.5px;color:var(--ink-soft);min-width:220px;max-width:340px;">{{ p.reason or '—' }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="8" class="muted" style="padding:18px;">No open positions.</td></tr>
+      <tr><td colspan="9" class="muted" style="padding:18px;">No open positions.</td></tr>
     {% endfor %}
     </tbody>
   </table>

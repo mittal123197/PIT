@@ -75,18 +75,20 @@ How you trade is entirely your call: how many positions, how big, how long you \
 hold, whether you trade often or rarely, concentrate or spread out. Nothing \
 here is a strategy hint — the only rules are the hard ones below.
 
-Order mechanics: the only orders are buys and sells executed immediately at \
-the current price when you decide. There are NO stop orders, limit orders or \
-take-profit orders you can place, and nothing you send persists until your \
-next wake-up — if you want out of something later, you sell it later. The \
-only automatic exits are the arena's own, below.
+Order mechanics: buys and sells execute immediately at the current price when \
+you decide. EVERY buy automatically carries a stop-loss: if that position later \
+falls a set % below your average entry it is sold for you, even while you \
+sleep. The default distance is """ + f"{DEFAULT.position_stop_loss_pct:g}" + """%; \
+you may set your own per buy with "stop_loss_pct" (0.5–20) — tighter or looser \
+is your call. There are no limit or take-profit orders, and nothing else \
+persists between wake-ups. Each of your positions shows its entry and its \
+stop distance.
 
 Hard rules, both enforced automatically (you don't have to act on them, but \
 you can't stop them): (1) a PORTFOLIO stop-loss liquidates your entire book if \
-its aggregate return falls too far. (2) a PER-POSITION stop-loss force-sells \
-ANY single holding on its own the moment IT ALONE falls """ + \
-f"{DEFAULT.position_stop_loss_pct:.0f}%" + """ below what you paid for it — \
-independent of how the rest of your book is doing. Manage risk accordingly: \
+its aggregate return falls too far. (2) each position's own stop-loss (above) force-sells \
+that holding on its own the moment IT ALONE falls its stop % below what you \
+paid — independent of how the rest of your book is doing. Manage risk accordingly: \
 don't count on averaging down a loser before it hits its own stop.
 Goal: maximise return, avoid losses.
 """ + ("""
@@ -130,7 +132,7 @@ Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
   "research": { "scan": true, "history": ["TICKER", ...], "fundamentals": ["TICKER", ...] },
-  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"reason":"..."} ],
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"stop_loss_pct":N,"reason":"..."} ],
   "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
   "done": true|false,
   "notes": "carry-forward notes to your future self"
@@ -160,7 +162,7 @@ decision per wake-up, then sleep until the next one (several minutes).
 _BRIEF_FORMAT = """Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
-  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"reason":"..."} ],
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount_inr":N,"stop_loss_pct":N,"reason":"..."} ],
   "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
   "done": true,
   "notes": "carry-forward notes to your future self"
@@ -369,6 +371,11 @@ def _clean_orders(orders: list) -> list[dict]:
                 entry["amount_inr"] = float(o["amount_inr"])
             if "qty" in o and o["qty"]:
                 entry["qty"] = float(o["qty"])
+            if side == "buy" and o.get("stop_loss_pct") not in (None, ""):
+                try:
+                    entry["stop_loss_pct"] = float(o["stop_loss_pct"])
+                except (TypeError, ValueError):
+                    pass   # unparseable -> default stop applies
             if "amount_inr" in entry or "qty" in entry:
                 out.append(entry)
         except (KeyError, ValueError, TypeError):

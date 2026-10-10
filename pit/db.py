@@ -63,6 +63,8 @@ _COLUMN_ADDITIONS = [
     # last marked price per held ticker, so the dashboard can show live
     # value / P&L per position without hitting the market itself
     ("round_states", "mark_prices", "TEXT NOT NULL DEFAULT '{}'"),
+    # per-position stop distance (%), set on each buy — default or the agent's own
+    ("round_states", "stop_pcts", "TEXT NOT NULL DEFAULT '{}'"),
     # live-session timing, for the dashboard's progress bar / next wake-up
     ("rounds", "ends_at", "TEXT"),
     ("rounds", "interval_s", "INTEGER"),

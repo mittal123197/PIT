@@ -602,8 +602,11 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
                     lots[key].popleft()
 
     open_positions = []
-    marks = {r["agent_id"]: _json(r["mark_prices"]) for r in _rows(conn.execute(
-        "SELECT agent_id, mark_prices FROM round_states WHERE round_id=?", (round_id,)))}
+    rs = _rows(conn.execute(
+        "SELECT agent_id, mark_prices, stop_pcts FROM round_states WHERE round_id=?",
+        (round_id,)))
+    marks = {r["agent_id"]: _json(r["mark_prices"]) for r in rs}
+    stops = {r["agent_id"]: _json(r.get("stop_pcts")) for r in rs}
     now = _ts_seconds(__import__("datetime").datetime.now().strftime("%H:%M:%S"))
     for (agent_id, symbol), q in lots.items():
         total_qty = sum(l["qty"] for l in q)
@@ -615,6 +618,9 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
             "name": names.get(agent_id, "?"), "symbol": symbol,
             "qty": total_qty, "avg_price": round(cost / total_qty, 8),
             "now_price": marks.get(agent_id, {}).get(symbol),
+            "stop_pct": stops.get(agent_id, {}).get(symbol, DEFAULT.position_stop_loss_pct),
+            "stop_price": (cost / total_qty) * (1 - stops.get(agent_id, {}).get(
+                symbol, DEFAULT.position_stop_loss_pct) / 100),
             "pnl_pct": (round((marks[agent_id][symbol] / (cost / total_qty) - 1) * 100, 2)
                         if marks.get(agent_id, {}).get(symbol) else None),
             "entry_ts": first_ts, "held": _fmt_hold(_ts_seconds(first_ts), now),

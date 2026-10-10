@@ -338,8 +338,14 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
         agent = conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone()
         cfg = json.loads(agent["strategy_config"])
         holdings = json.loads(st["holdings"])
+        cb = json.loads(st.get("cost_basis") or "{}")
+        sp = json.loads(st.get("stop_pcts") or "{}")
         positions = [{"ticker": t, "qty": q, "price": price(t),
-                      "value": round(q * (price(t) or 0), 2)}
+                      "value": round(q * (price(t) or 0), 2),
+                      "avg_entry": cb.get(t),
+                      "stop_pct": sp.get(t, config.position_stop_loss_pct),
+                      "stop_price": (round(cb[t] * (1 - sp.get(t, config.position_stop_loss_pct) / 100), 8)
+                                     if cb.get(t) else None)}
                      for t, q in holdings.items()]
         view = {
             "cash": round(st["current_capital"], 2), "positions": positions,

@@ -269,6 +269,18 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
             "date": date, "logs": logs}
 
 
+# Bounds on an agent-chosen per-position stop (stop_loss_pct on a buy).
+STOP_PCT_MIN, STOP_PCT_MAX = 0.5, 20.0
+
+
+def _stop_pct_for(order: dict, default: float) -> float:
+    try:
+        v = float(order.get("stop_loss_pct"))
+    except (TypeError, ValueError):
+        return default
+    return min(STOP_PCT_MAX, max(STOP_PCT_MIN, v))
+
+
 # Smallest order worth executing. Without it agents made $0.02 "trades"
 # (0.0001 shares) that count as trades and clutter the ledger.
 MIN_ORDER_USD = 1.0
@@ -285,6 +297,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
     rejected = []   # surfaced to the live console/page; used to be silent
     holdings = json.loads(st["holdings"])
     cost_basis = json.loads(st.get("cost_basis") or "{}")
+    stop_pcts = json.loads(st.get("stop_pcts") or "{}")
     cash = st["current_capital"]
     for o in orders:
         px = price(o["ticker"])
@@ -310,6 +323,10 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
             cost_basis[o["ticker"]] = ((prev_qty * prev_cost + qty * px)
                                        / (prev_qty + qty))
             holdings[o["ticker"]] = prev_qty + qty
+            # every buy carries a stop by default; the agent may set its own
+            # distance (bounded) — a later buy of the same name can reset it
+            if "stop_loss_pct" in o or o["ticker"] not in stop_pcts:
+                stop_pcts[o["ticker"]] = _stop_pct_for(o, DEFAULT.position_stop_loss_pct)
         else:  # sell
             held = holdings.get(o["ticker"], 0.0)
             qty = _floor_qty(o.get("qty", held) if "qty" in o
@@ -327,6 +344,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
             if rem <= 1e-9:
                 holdings.pop(o["ticker"], None)
                 cost_basis.pop(o["ticker"], None)
+                stop_pcts.pop(o["ticker"], None)
             else:
                 holdings[o["ticker"]] = rem
                 # avg cost basis is unchanged by a partial sell
@@ -340,9 +358,10 @@ def _execute(conn, round_id, agent_id, st, orders, price, date) -> int:
     st["holdings"] = json.dumps(holdings)
     st["cost_basis"] = json.dumps(cost_basis)
     st["rejected_orders"] = rejected
-    conn.execute("UPDATE round_states SET trade_count=trade_count+?, cost_basis=? "
-                 "WHERE round_id=? AND agent_id=?",
-                 (n, json.dumps(cost_basis), round_id, agent_id))
+    st["stop_pcts"] = json.dumps(stop_pcts)
+    conn.execute("UPDATE round_states SET trade_count=trade_count+?, cost_basis=?, "
+                 "stop_pcts=? WHERE round_id=? AND agent_id=?",
+                 (n, json.dumps(cost_basis), st["stop_pcts"], round_id, agent_id))
     return n
 
 
@@ -355,6 +374,7 @@ def check_position_stops(conn, round_id, agent_id, st, price, date, config) -> i
     if not holdings:
         return 0
     cost_basis = json.loads(st.get("cost_basis") or "{}")
+    stop_pcts = json.loads(st.get("stop_pcts") or "{}")
     cash = st["current_capital"]
     sold = 0
     for ticker, qty in list(holdings.items()):
@@ -364,24 +384,28 @@ def check_position_stops(conn, round_id, agent_id, st, price, date, config) -> i
         px = price(ticker)
         if not px or px <= 0:
             continue
-        if px <= entry * (1 - config.position_stop_loss_pct / 100.0):
+        pct = stop_pcts.get(ticker, config.position_stop_loss_pct)
+        if px <= entry * (1 - pct / 100.0):
             cash += qty * px
             holdings.pop(ticker, None)
             cost_basis.pop(ticker, None)
+            stop_pcts.pop(ticker, None)
             conn.execute(
                 """INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty,
                    price, capital_after, reason) VALUES (?,?,?,?,'sell',?,?,?,?)""",
                 (round_id, agent_id, date, ticker, qty, px, cash,
-                 f"position stop-loss (entry {entry:.2f}, -{config.position_stop_loss_pct:.0f}%)"))
+                 f"position stop-loss (entry {entry:.6g}, -{pct:g}%)"))
             sold += 1
     if sold:
         st["current_capital"] = cash
         st["holdings"] = json.dumps(holdings)
         st["cost_basis"] = json.dumps(cost_basis)
+        st["stop_pcts"] = json.dumps(stop_pcts)
         conn.execute("UPDATE round_states SET current_capital=?, holdings=?, "
-                     "cost_basis=?, trade_count=trade_count+? "
+                     "cost_basis=?, stop_pcts=?, trade_count=trade_count+? "
                      "WHERE round_id=? AND agent_id=?",
-                     (cash, st["holdings"], st["cost_basis"], sold, round_id, agent_id))
+                     (cash, st["holdings"], st["cost_basis"], st["stop_pcts"], sold,
+                      round_id, agent_id))
     return sold
 
 

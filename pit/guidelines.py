@@ -327,9 +327,10 @@ def _llm_vote(lin, proposal):
 # and a fallback vote rule that made winners reflexively reject new rules.
 
 ARENA_FACTS = ("Arena facts: long-only paper trading (no leverage, no shorting, "
-               "no options); the ONLY orders are immediate buys/sells at the current "
-               "price — agents cannot place stop, limit or take-profit orders, and "
-               "nothing persists between wake-ups; fractional quantities allowed; portfolio and "
+               "no options); orders are immediate buys/sells at the current price; "
+               "every buy automatically carries a per-position stop-loss (default "
+               "distance, or the agent's own stop_loss_pct set on the buy); there "
+               "are no limit or take-profit orders; fractional quantities allowed; portfolio and "
                "per-position stop-losses fire automatically, and every open "
                "position is force-closed by the arena at the round's deadline "
                "(agents can't choose to keep or close it); each agent decides "

@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS round_states (
     current_capital    REAL NOT NULL,     -- cash only; total value = cash + holdings
     holdings           TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: qty}
     mark_prices        TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: last marked price}
+    stop_pcts          TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: stop % below avg entry}
     cost_basis         TEXT NOT NULL DEFAULT '{}',  -- JSON {symbol: avg_buy_price},
                                               -- weighted average; drives the
                                               -- per-position hard stop-loss
