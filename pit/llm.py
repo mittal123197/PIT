@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 
 from .actions import Action, Hold, PlaceOrder, SetHeartbeat, SetWatch
@@ -165,12 +166,73 @@ def _ollama_chat(model: str, messages: list, temperature: float,
     return data["choices"][0]["message"]["content"]
 
 
+# Claude — Anthropic's own API via the official SDK. ANTHROPIC_API_KEY in .env.
+# Current models reject non-default sampling (temperature) and assistant
+# prefill, so JSON is asked for in the system prompt and the object is pulled
+# out of the reply. Every call's token usage is appended to
+# data/claude_usage.jsonl so a small prepaid credit can be watched.
+_CLAUDE_PRICES = {  # $ per 1M tokens (input, output)
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-haiku-5-5": (0.10, 0.50),
+    "claude-opus-5-5": (4.00, 20.00),
+}
+
+
+def _anthropic_chat(model: str, messages: list, temperature: float,
+                    json_mode: bool) -> str:
+    import anthropic
+    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    if json_mode:
+        system += ("\n\nRespond with exactly one JSON object and nothing else "
+                   "— no prose, no code fences.")
+    convo = [{"role": m["role"], "content": m["content"]}
+             for m in messages if m["role"] != "system"]
+    client = anthropic.Anthropic(max_retries=2, timeout=120.0)
+    resp = client.messages.create(
+        model=model, max_tokens=16000, system=system, messages=convo,
+        output_config={"effort": os.getenv("PIT_CLAUDE_EFFORT", "medium")})
+    if resp.stop_reason == "refusal":
+        raise RuntimeError(f"Claude refused: {getattr(resp.stop_details, 'category', None)}")
+    _log_claude_usage(model, resp.usage)
+    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    if json_mode and text and not text.startswith("{"):
+        i, j = text.find("{"), text.rfind("}")
+        if i != -1 and j > i:
+            text = text[i:j + 1]
+    return text
+
+
+def _log_claude_usage(model: str, usage) -> None:
+    try:
+        from pathlib import Path
+        inp, out = _CLAUDE_PRICES.get(model, (0.0, 0.0))
+        cost = (usage.input_tokens * inp + usage.output_tokens * out) / 1e6
+        path = Path(__file__).resolve().parent.parent / "data" / "claude_usage.jsonl"
+        with path.open("a") as f:
+            f.write(json.dumps({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "model": model,
+                                "in": usage.input_tokens, "out": usage.output_tokens,
+                                "usd": round(cost, 5)}) + "\n")
+    except Exception:
+        pass
+
+
+def claude_spend() -> float:
+    """Total estimated $ spent on Claude calls so far (from the usage log)."""
+    from pathlib import Path
+    path = Path(__file__).resolve().parent.parent / "data" / "claude_usage.jsonl"
+    try:
+        return round(sum(json.loads(l)["usd"] for l in path.read_text().splitlines() if l), 4)
+    except Exception:
+        return 0.0
+
+
 def llm_chat(model: str, messages: list, temperature: float = 0.6,
              json_mode: bool = True) -> str:
     """Return the assistant message content. `openrouter:<model>` routes to
     OpenRouter (any frontier model); `deepseek:<model>` routes to DeepSeek's
     own paid API (not a shared free pool); `ollama:<model>` routes to a local
-    Ollama server; anything else routes to Groq."""
+    Ollama server; `anthropic:<model>` routes to Claude; anything else routes
+    to Groq."""
     if model.startswith("openrouter:"):
         return _openrouter_chat(model[len("openrouter:"):], messages,
                                 temperature, json_mode)
@@ -180,6 +242,9 @@ def llm_chat(model: str, messages: list, temperature: float = 0.6,
     if model.startswith("ollama:"):
         return _ollama_chat(model[len("ollama:"):], messages,
                             temperature, json_mode)
+    if model.startswith("anthropic:"):
+        return _anthropic_chat(model[len("anthropic:"):], messages,
+                               temperature, json_mode)
     kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
     kwargs.update(_extra_for(model))
     try:
