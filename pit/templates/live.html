@@ -109,7 +109,9 @@
       <div style="font-family:'Space Grotesk';font-weight:700;font-size:30px;line-height:1.1;"
         class="{{ 'up' if a.ret > -0.005 else 'down' }}">{{ a.ret|pct }}</div>
       <div class="mono muted" style="font-size:12.5px;margin-top:4px;">
-        {{ a.value|money2 }} <span class="muted">·</span> cash {{ a.current_capital|money2 }}
+        <span title="what the agent was given at the start of the round">started {{ a.starting_capital|money2 }}</span>
+        <span class="muted">→</span> <span title="account value now: cash + stocks at the latest price">worth <b style="color:var(--ink);">{{ a.value|money2 }}</b></span>
+        <span class="muted">·</span> <span title="{{ 'every position was sold at the deadline, so the whole account is cash' if not data.is_live else 'uninvested cash' }}">cash {{ a.current_capital|money2 }}</span>
         <span class="muted">·</span> {{ a.trade_count }} trades</div>
       <div class="kpis">
         <div title="share of the account in stocks right now (the rest is cash)">
