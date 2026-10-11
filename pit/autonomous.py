@@ -120,6 +120,9 @@ last decision and why (e.g. no cash left). If `your_cash` is near zero you \
 CANNOT buy — sell something first to free cash, and don't resubmit the same \
 unaffordable order.
 
+`arena_sold_for_you_this_round` lists positions the arena sold for you \
+(a stop-loss that fired while you slept) — when, which ticker, at what price.
+
 `rival_returns` is every rival's current return % this round — the live \
 scoreboard you are fighting.
 
@@ -263,6 +266,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "rival_held_tickers": view.get("rival_held_tickers", []),
         "rival_recent_moves": view.get("rival_recent_moves", []),
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
+        "arena_sold_for_you_this_round": view.get("arena_sold_for_you_this_round", []),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
         "arena_risk": view.get("risk"),

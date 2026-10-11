@@ -38,6 +38,12 @@
   .poslist .r{display:flex;justify-content:space-between;gap:8px;padding:3px 0;
     border-bottom:1px solid var(--line-soft);}
   .poslist .r:last-child{border-bottom:none;}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px;margin-top:10px;}
+  .kpis>div{background:var(--bg-soft,rgba(127,127,127,.06));border:1px solid var(--line-soft,var(--line));border-radius:8px;padding:6px 8px;display:flex;flex-direction:column;gap:1px;}
+  .kpis .kl{font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);}
+  .kpis b{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13.5px;color:var(--ink);}
+  .kpis b.up{color:var(--alpha);} .kpis b.down{color:var(--liq);}
+  .kpis .kh{font-size:10.5px;color:var(--ink-faint);}
   .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;}
 </style>
 
@@ -56,11 +62,11 @@
         <span><span class="k">agents wake</span><span class="mono">{{ data.timing.next_wake }}</span></span>
       {% endif %}
     {% endif %}
-    <span><span class="k">portfolio stop</span><span class="mono down">−{{ '%.2f'|format(data.risk.stop) }}%</span></span>
-    {% if data.risk.goal %}<span><span class="k">take-profit</span><span class="mono up">+{{ '%.2f'|format(data.risk.goal) }}%</span></span>{% endif %}
+    <span title="if an agent's WHOLE account falls this far, the arena sells everything and it sits out the rest of the round"><span class="k">portfolio stop</span><span class="mono down">−{{ '%.2f'|format(data.risk.stop) }}%</span></span>
+    {% if data.risk.goal %}<span title="if an agent's WHOLE account gains this much, the arena sells everything and locks the gain for the rest of the round"><span class="k">take-profit</span><span class="mono up">+{{ '%.2f'|format(data.risk.goal) }}%</span></span>{% endif %}
     {% if data.risk.pos_lo is not none %}
-    <span title="every buy's default stop: ~2× that asset's expected move over this round (agents may set their own)"><span class="k">auto position stops</span><span class="mono down">−{{ '%.2f'|format(data.risk.pos_lo) }}…{{ '%.2f'|format(data.risk.pos_hi) }}%</span></span>
-    <span title="expected 1σ move of a typical asset over the whole round, from 20-day volatility"><span class="k">1σ move / round</span><span class="mono">±{{ '%.2f'|format(data.risk.sigma) }}%</span></span>
+    <span title="each buy is auto-sold if it falls this far below its entry: about 2× that stock's typical move over the round, so calm names get tight stops and jumpy ones wider. Agents may set their own"><span class="k">stop per stock</span><span class="mono down">−{{ '%.2f'|format(data.risk.pos_lo) }}…{{ '%.2f'|format(data.risk.pos_hi) }}%</span></span>
+    <span title="how much a typical name moves (one standard deviation) over this round's length, from its last 20 days — the yardstick every band here is sized from"><span class="k">typical move</span><span class="mono">±{{ '%.2f'|format(data.risk.sigma) }}%</span></span>
     {% else %}
     <span title="applied to every buy unless the agent sets its own"><span class="k">default position stop</span><span class="mono down">−{{ '%.0f'|format(data.risk.position_stop) }}%</span></span>
     {% endif %}
@@ -74,8 +80,10 @@
 <div class="sec" style="margin-top:6px;"><div class="eyebrow">The race</div>
   <div class="subtitle">Every agent's return over the session, marked every few seconds.
     <span style="color:#3ddc97;">▲</span> buy · <span style="color:#f0563c;">▼</span> sell{% if data.bench_name %}
-    · dashed grey = <b>{{ data.bench_name }}</b> (just holding the market{% if data.bench_now is not none %}:
-    <span class="mono {{ 'up' if data.bench_now > -0.005 else 'down' }}">{{ data.bench_now|pct }}</span>{% endif %}){% endif %}</div></div>
+    {% set bsym = data.bench_name.replace(' hold', '') %}
+    · dashed grey = <b>{{ data.bench_name }}</b> — the return from simply buying
+    {{ 'the S&P 500 (SPY)' if bsym == 'SPY' else bsym }} at the start and doing nothing{% if data.bench_now is not none %}:
+    <span class="mono {{ 'up' if data.bench_now > -0.005 else 'down' }}">{{ data.bench_now|pct }}</span>{% endif %}. An agent below it would have done better not trading.{% endif %}</div></div>
 {% if data.race_svg %}
 <div class="panel racewrap" style="padding:14px 10px 6px;">{{ data.race_svg|safe }}</div>
 {% else %}
@@ -102,12 +110,22 @@
       <div class="mono muted" style="font-size:12.5px;margin-top:4px;">
         {{ a.value|money2 }} <span class="muted">·</span> cash {{ a.current_capital|money2 }}
         <span class="muted">·</span> {{ a.trade_count }} trades</div>
-      <div class="mono" style="font-size:11.5px;margin-top:8px;display:flex;flex-wrap:wrap;gap:4px 14px;color:var(--ink-soft);">
-        <span title="share of the account in positions">exposure <b style="color:var(--ink);">{{ a.exposure_pct }}%</b></span>
-        <span title="profit/loss locked in by sells">realized <b class="{{ 'up' if a.realized > -0.005 else 'down' }}">{{ a.realized|money2 }}</b></span>
-        <span title="profit/loss on positions still open">open <b class="{{ 'up' if a.unrealized > -0.005 else 'down' }}">{{ a.unrealized|money2 }}</b></span>
-        {% if a.max_dd is not none %}<span title="worst fall from this round's peak">max DD <b class="{{ 'down' if a.max_dd < -0.005 else '' }}">{{ a.max_dd|pct }}</b></span>{% endif %}
-        {% if data.bench_now is not none %}<span title="return minus just holding {{ data.bench_name }}">vs mkt <b class="{{ 'up' if (a.ret - data.bench_now) > -0.005 else 'down' }}">{{ (a.ret - data.bench_now)|pct }}</b></span>{% endif %}
+      <div class="kpis">
+        <div title="share of the account in stocks right now (the rest is cash)">
+          <span class="kl">invested</span><b>{{ a.exposure_pct }}%</b>
+          <span class="kh">{{ 'all in' if a.exposure_pct >= 99.5 else 'all cash' if a.exposure_pct < 0.5 else (100 - a.exposure_pct)|round|int ~ '% cash' }}</span></div>
+        <div title="profit/loss already locked in by selling">
+          <span class="kl">booked P&amp;L</span><b class="{{ 'up' if a.realized > -0.005 else 'down' }}">{{ a.realized|money2 }}</b>
+          <span class="kh">from sells</span></div>
+        <div title="profit/loss on positions still held, at the latest price">
+          <span class="kl">paper P&amp;L</span><b class="{{ 'up' if a.unrealized > -0.005 else 'down' }}">{{ a.unrealized|money2 }}</b>
+          <span class="kh">still held</span></div>
+        {% if a.max_dd is not none %}<div title="biggest fall from this agent's own high point this round (max drawdown)">
+          <span class="kl">worst dip</span><b class="{{ 'down' if a.max_dd < -0.005 else '' }}">{{ a.max_dd|pct }}</b>
+          <span class="kh">from its peak</span></div>{% endif %}
+        {% if data.bench_now is not none %}<div title="this agent's return minus simply buying {{ data.bench_name.replace(' hold', '') }} at the start and holding it">
+          <span class="kl">vs {{ data.bench_name.replace(' hold', '') }}</span><b class="{{ 'up' if (a.ret - data.bench_now) > -0.005 else 'down' }}">{{ (a.ret - data.bench_now)|pct }}</b>
+          <span class="kh">{{ 'beating' if (a.ret - data.bench_now) > 0.005 else 'lagging' if (a.ret - data.bench_now) < -0.005 else 'level with' }} buy &amp; hold</span></div>{% endif %}
       </div>
       <div class="alloc" title="allocation: positions vs cash">
         {% for seg in a.alloc %}

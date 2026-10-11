@@ -251,6 +251,18 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
     return standings
 
 
+def _forced_exits(conn, round_id, agent_id) -> list[dict]:
+    """Positions the arena sold on this agent's behalf (its stop-loss etc.).
+    Before this an agent only noticed a stop-out as a position that silently
+    vanished from its book."""
+    rows = conn.execute(
+        "SELECT ts, symbol, qty, price, reason FROM trades WHERE round_id=? AND "
+        "agent_id=? AND side='sell' ORDER BY id DESC LIMIT 20", (round_id, agent_id)).fetchall()
+    return [{"when": r["ts"], "ticker": r["symbol"], "qty": r["qty"],
+             "price": r["price"], "why": r["reason"]}
+            for r in rows if forward.is_forced(r["reason"])][:5]
+
+
 def _risk_view(rnd, config) -> dict:
     left = None
     try:
@@ -446,6 +458,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             "rival_returns": {forward._name(conn, a): round(r, 2)
                               for a, r in returns.items() if a != aid},
             "orders_not_executed_last_tick": _LAST_REJECTIONS.get(aid, []),
+            "arena_sold_for_you_this_round": _forced_exits(conn, rnd["id"], aid),
         }
         jobs.append({"aid": aid, "st": st, "name": name, "cfg": cfg, "view": view})
 
