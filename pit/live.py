@@ -133,6 +133,8 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         brief_mod.prefetch_fundamentals(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
                                         verbose)
     _set_risk_bands(conn, config, rnd, minutes, verbose)
+    if replay._STATE:
+        _clear_memory_for_replay(conn, rnd, verbose)
     end = time.time() + minutes * 60
     conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=? WHERE id=?",
                  (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"),
@@ -291,6 +293,31 @@ def _row_get(row, key):
         return row[key]
     except (KeyError, IndexError):
         return None
+
+
+def _clear_memory_for_replay(conn, rnd, verbose) -> None:
+    """A replay re-runs a day that is already history. Notes an agent wrote
+    after earlier rounds — above all after an earlier replay of the SAME day —
+    can name the day's winner ("PLTR was the right horse"), so carrying them
+    in is hindsight: all three agents piled into PLTR on turn one, citing
+    exactly those notes and their rivals' lessons. Each replay starts with a
+    clean memory (rival lessons from earlier rounds are hidden too, see
+    forward._recent_messages); notes written DURING the replay still carry
+    from one wake-up to the next."""
+    for r in conn.execute("SELECT agent_id FROM round_states WHERE round_id=?",
+                          (rnd["id"],)).fetchall():
+        row = conn.execute("SELECT strategy_config FROM agents WHERE id=?",
+                           (r["agent_id"],)).fetchone()
+        cfg = json.loads(row["strategy_config"] or "{}")
+        if cfg.get("notes"):
+            cfg["notes"] = ""
+            conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
+                         (json.dumps(cfg), r["agent_id"]))
+    conn.commit()
+    if verbose:
+        print("[replay] agents start with a clean memory — no notes or rival "
+              "lessons from earlier rounds (they could know how this day ends)",
+              flush=True)
 
 
 def _set_risk_bands(conn, config, rnd, minutes, verbose) -> None:
@@ -453,7 +480,8 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
             "rival_held_tickers": forward._held_by_rivals(holdings_snapshot, aid),
-            "rival_messages": forward._recent_messages(conn, rnd["id"], aid),
+            "rival_messages": forward._recent_messages(conn, rnd["id"], aid,
+                                                       this_round_only=bool(replay._STATE)),
             "rival_recent_moves": forward._rival_recent_moves(conn, rnd["id"], aid),
             "rival_returns": {forward._name(conn, a): round(r, 2)
                               for a, r in returns.items() if a != aid},

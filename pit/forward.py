@@ -885,7 +885,8 @@ def _drop_blocked_buys(orders: list[dict], blocked: set) -> tuple[list[dict], li
     return clean, rejected
 
 
-def _recent_messages(conn, round_id, agent_id, limit=4) -> list[str]:
+def _recent_messages(conn, round_id, agent_id, limit=4,
+                     this_round_only: bool = False) -> list[str]:
     """ALL OTHER PARTICIPANTS' recent messages this round (not this agent's
     own), oldest-first: this round's banter/lessons, plus each rival's most
     recent lesson from any round if it isn't already in that window.
@@ -912,6 +913,8 @@ def _recent_messages(conn, round_id, agent_id, limit=4) -> list[str]:
         f"ORDER BY m.id DESC LIMIT ?",
         (round_id, *rival_ids, limit)).fetchall()
     msgs = [f"{r['name']}: {r['message']}" for r in reversed(rows)]
+    if this_round_only:   # replay: lessons from earlier rounds may know how the day ends
+        return msgs
     for lineage_id in rival_lineages:
         last_lesson = conn.execute(
             "SELECT m.message, l.name FROM agent_messages m "
