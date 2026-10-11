@@ -276,6 +276,35 @@ def _replay_history(ticker: str, days: int = 30) -> list[tuple[str, float]]:
     return out
 
 
+def market_ts(wall_ts: str | None) -> str | None:
+    """Translate a stored wall-clock stamp ("YYYY-mm-dd HH:MM:SS", local)
+    into the replayed session's own time in New York ("2026-10-09 09:49 ET").
+    Fills are stamped in wall time, so in a 10-minute replay a buy at the
+    open read as "15:49" — an agent concluded it had bought "~10 minutes
+    before the close" and drew the wrong lesson. None if no replay is active."""
+    if not wall_ts or not _STATE.get("start_wall") or not _STATE.get("sim_start"):
+        return None
+    try:
+        wall = time.mktime(datetime.strptime(wall_ts[:19], "%Y-%m-%d %H:%M:%S").timetuple())
+    except ValueError:
+        return None
+    sim = _STATE["sim_start"] + timedelta(seconds=max(0.0, wall - _STATE["start_wall"])
+                                          * _STATE["speed"])
+    sim = min(sim, _STATE["sim_end"])
+    try:
+        from zoneinfo import ZoneInfo
+        if sim.tzinfo is not None:
+            sim = sim.astimezone(ZoneInfo("America/New_York"))
+    except Exception:
+        pass
+    return sim.strftime("%Y-%m-%d %H:%M ET")
+
+
+def agent_ts(wall_ts: str | None) -> str | None:
+    """The time an agent should see: market time in a replay, else as stored."""
+    return market_ts(wall_ts) or wall_ts
+
+
 def sim_minutes_left() -> float | None:
     now = sim_now()
     if not now or not _STATE.get("sim_end"):

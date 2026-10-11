@@ -717,7 +717,7 @@ def _rival_recent_moves(conn, round_id, self_aid, limit=8) -> list[dict]:
         if reason in ("round-end close", "stop-loss", "goal-hit") or reason.startswith("position stop"):
             continue
         out.append({"rival": r["name"], "side": r["side"], "ticker": r["symbol"],
-                    "at": r["ts"]})
+                    "at": _agent_ts(r["ts"])})
         if len(out) >= limit:
             break
     return out
@@ -733,6 +733,11 @@ def is_forced(reason: str | None) -> bool:
     return r in FORCED_REASONS or r.startswith("position stop")
 
 
+def _agent_ts(ts):
+    from .replay import agent_ts
+    return agent_ts(ts)
+
+
 def _own_trades(conn, round_id, agent_id) -> list[dict]:
     """The agent's fills this round, each flagged forced_by_arena where the
     arena made it. Unflagged, the deadline close-out read like the agent's own
@@ -741,8 +746,10 @@ def _own_trades(conn, round_id, agent_id) -> list[dict]:
     rows = [dict(r) for r in conn.execute(
         "SELECT ts,symbol,side,qty,price,reason FROM trades "
         "WHERE round_id=? AND agent_id=? ORDER BY id", (round_id, agent_id))]
+    from .replay import agent_ts
     for r in rows:
         r["forced_by_arena"] = is_forced(r["reason"])
+        r["ts"] = agent_ts(r["ts"])
     return rows
 
 

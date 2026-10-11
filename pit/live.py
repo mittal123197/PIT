@@ -260,7 +260,7 @@ def _forced_exits(conn, round_id, agent_id) -> list[dict]:
     rows = conn.execute(
         "SELECT ts, symbol, qty, price, reason FROM trades WHERE round_id=? AND "
         "agent_id=? AND side='sell' ORDER BY id DESC LIMIT 20", (round_id, agent_id)).fetchall()
-    return [{"when": r["ts"], "ticker": r["symbol"], "qty": r["qty"],
+    return [{"when": replay.agent_ts(r["ts"]), "ticker": r["symbol"], "qty": r["qty"],
              "price": r["price"], "why": r["reason"]}
             for r in rows if forward.is_forced(r["reason"])][:5]
 

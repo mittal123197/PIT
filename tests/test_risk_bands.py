@@ -30,3 +30,18 @@ def test_auto_stop_falls_back_without_data():
     risk.set_round(30, "crypto", {"BTC-USD": 2.0})
     assert 0.5 <= risk.auto_stop("BTC-USD", 8.0) < 1.0
     risk.clear()
+
+
+def test_replay_fill_times_are_shown_in_market_time():
+    import time
+    from datetime import datetime, timezone
+    from pit import replay
+    replay._STATE.update(sim_start=datetime(2026, 10, 9, 13, 30, tzinfo=timezone.utc),
+                         sim_end=datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc),
+                         start_wall=time.time() - 60, speed=39.0)
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        assert replay.agent_ts(ts) in ("2026-10-09 10:08 ET", "2026-10-09 10:09 ET")  # 60s x 39 = 39 market min
+    finally:
+        replay._STATE.clear()
+    assert replay.agent_ts("2026-10-11 15:49:00") == "2026-10-11 15:49:00"
