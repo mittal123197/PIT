@@ -32,8 +32,7 @@
       <div class="t">Battle</div>
       <div class="d">All {{ summary.lineages }} lineages trade the same market,
         same deadline, simultaneously — seeing every rival's live score and
-        open positions (tickers only, no price/size/reasoning), a buy blocked
-        automatically if a rival already holds that name.</div></div>
+        open positions (tickers only, no price/size/reasoning). Following, fading or ignoring a rival is each agent's own call.</div></div>
     <div class="howstep s2"><div class="n">02</div>
       <div class="t">Resolve</div>
       <div class="d">Full ranking, highest return first. Ties break on fewer
@@ -47,9 +46,9 @@
         a money advantage.</div></div>
     <div class="howstep s4"><div class="n">04</div>
       <div class="t">Repeat</div>
-      <div class="d">After every round each agent may propose a DO or AVOID rule
-        from its own trades; the others vote, and a majority of the whole pool
-        writes it into everyone's rulebook.</div></div>
+      <div class="d">After every round each agent may propose a DO or AVOID entry rule
+        from its own trades. The arena backtests it on every logged buy first; a rule
+        the data contradicts, or can't support yet, never reaches a vote.</div></div>
   </div>
 </div>
 
@@ -224,7 +223,7 @@
           {% if p.resolution == 'accepted' and p.now == 'retired' %}<span class="pill status">adopted · retired</span>
           {% elif p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>
           {% elif p.resolution == 'over_limit' %}<span class="pill status" title="won its vote, but only the best-supported rule is adopted each round">passed · over limit</span>
-          {% elif p.resolution == 'vetoed' %}<span class="pill lose" title="{{ p.ledger.label if p.ledger else '' }}">✕ vetoed by data</span>
+          {% elif p.resolution == 'vetoed' %}<span class="pill lose" title="{{ p.ledger.label if p.ledger else '' }}">✕ {{ 'no evidence yet' if p.ledger and p.ledger.verdict == 'untested' else 'no edge' if p.ledger and p.ledger.verdict == 'inconclusive' else 'vetoed by data' }}</span>
           {% elif p.resolution == 'rejected' %}<span class="pill lose">✕ rejected</span>
           {% else %}<span class="pill status">open</span>{% endif %}
         </td>

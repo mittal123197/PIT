@@ -330,6 +330,12 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
            JOIN lineages l ON l.id = a.lineage_id
            WHERE m.round_id=? ORDER BY m.id""", (r["id"],)))
     rd = dict(r)
+    clock = _replay_clock(conn, r["id"])
+    if clock:
+        for m in messages:
+            m["ts"] = clock(m["ts"])
+        rd["market_now"] = clock(__import__("datetime").datetime.now()
+                                 .strftime("%Y-%m-%d %H:%M:%S"))
     timing = _session_timing(rd)
     series = race_series(conn, r["id"])
     dd = _max_drawdowns(conn, r["id"])
@@ -579,6 +585,35 @@ def _nice_step(raw: float) -> float:
     return 10 * mag
 
 
+def _replay_clock(conn, round_id):
+    """ts -> the replayed session's market time ("2026-10-09 10:47:12", ET)
+    for a replay round; identity for a live round. Stamps are stored in wall
+    time, so a Friday replay run on Sunday showed Sunday's date and holding
+    times of seconds where ~an hour of market had passed."""
+    from datetime import datetime, timedelta
+    row = conn.execute("SELECT replay_anchor FROM rounds WHERE id=?", (round_id,)).fetchone()
+    try:
+        a = json.loads(row["replay_anchor"]) if row and row["replay_anchor"] else None
+    except Exception:
+        a = None
+    if not a:
+        return None
+    start = datetime.strptime(a["sim_start"], "%Y-%m-%d %H:%M:%S")
+    end = datetime.strptime(a["sim_end"], "%Y-%m-%d %H:%M:%S")
+
+    def conv(ts):
+        if not ts:
+            return ts
+        try:
+            import time as _t
+            wall = _t.mktime(datetime.strptime(str(ts)[:19], "%Y-%m-%d %H:%M:%S").timetuple())
+        except ValueError:
+            return ts
+        m = start + timedelta(seconds=max(0.0, wall - a["start_wall"]) * a["speed"])
+        return min(m, end).strftime("%Y-%m-%d %H:%M:%S")
+    return conv
+
+
 def _ts_seconds(ts: str):
     """Best-effort seconds-of-day from either 'HH:MM:SS' or an ISO timestamp."""
     try:
@@ -614,6 +649,10 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
         """SELECT t.*, l.name FROM trades t JOIN agents a ON a.id = t.agent_id
            JOIN lineages l ON l.id = a.lineage_id
            WHERE t.round_id=? ORDER BY t.id""", (round_id,)))
+    clock = _replay_clock(conn, round_id)
+    if clock:
+        for t in rows:
+            t["ts"] = clock(t["ts"])
     lots = defaultdict(deque)   # (agent_id, symbol) -> open buy lots
     round_trips, names = [], {}
     for t in rows:
@@ -648,7 +687,8 @@ def trade_analysis(conn: sqlite3.Connection, round_id: int) -> dict:
         (round_id,)))
     marks = {r["agent_id"]: _json(r["mark_prices"]) for r in rs}
     stops = {r["agent_id"]: _json(r.get("stop_pcts")) for r in rs}
-    now = _ts_seconds(__import__("datetime").datetime.now().strftime("%H:%M:%S"))
+    _now_wall = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = _ts_seconds(clock(_now_wall) if clock else _now_wall)
     for (agent_id, symbol), q in lots.items():
         total_qty = sum(l["qty"] for l in q)
         if total_qty <= 1e-9:
@@ -691,7 +731,10 @@ def audit_log(conn: sqlite3.Connection, round_id: int, limit: int = 300) -> list
            JOIN lineages l ON l.id = ag.lineage_id
            WHERE a.round_id=? ORDER BY a.id DESC LIMIT ?""",
         (round_id, limit)))
+    clock = _replay_clock(conn, round_id)
     for r in rows:
+        if clock:
+            r["ts"] = clock(r["ts"])
         for field in ("research_requested", "research_results", "orders"):
             if r.get(field):
                 try:

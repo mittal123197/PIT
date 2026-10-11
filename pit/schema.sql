@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS rounds (
     market         TEXT,                 -- e.g. "Crypto", "US top 100"
     stop_pct       REAL,                 -- volatility-scaled portfolio stop
     sigma_pct      REAL,                 -- expected 1-sigma move over the round
-    auto_stops     TEXT                  -- {symbol: default position stop %}
+    auto_stops     TEXT,                 -- {symbol: default position stop %}
+    replay_anchor  TEXT                  -- replay clock (JSON), see live.run_live
 );
 
 -- Per-agent-per-round mutable state (capital, holdings, risk tracking).

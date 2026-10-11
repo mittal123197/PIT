@@ -300,6 +300,22 @@ def market_ts(wall_ts: str | None) -> str | None:
     return sim.strftime("%Y-%m-%d %H:%M ET")
 
 
+def anchor() -> dict | None:
+    """The replay clock as plain data (ET, naive) for the dashboard."""
+    if not _STATE.get("start_wall") or not _STATE.get("sim_start"):
+        return None
+    def et(d):
+        try:
+            from zoneinfo import ZoneInfo
+            if d.tzinfo is not None:
+                d = d.astimezone(ZoneInfo("America/New_York"))
+        except Exception:
+            pass
+        return d.strftime("%Y-%m-%d %H:%M:%S")
+    return {"start_wall": _STATE["start_wall"], "speed": _STATE["speed"],
+            "sim_start": et(_STATE["sim_start"]), "sim_end": et(_STATE["sim_end"])}
+
+
 def agent_ts(wall_ts: str | None) -> str | None:
     """The time an agent should see: market time in a replay, else as stored."""
     return market_ts(wall_ts) or wall_ts

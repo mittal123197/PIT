@@ -139,6 +139,9 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
     conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=? WHERE id=?",
                  (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"),
                   int(interval), _market_label(), rnd["id"]))
+    if replay._STATE and replay.anchor():
+        conn.execute("UPDATE rounds SET replay_anchor=? WHERE id=?",
+                     (json.dumps(replay.anchor()), rnd["id"]))
     conn.commit()
     rnd = forward._active_round(conn)     # picks up ends_at + the risk bands
     for r in conn.execute("SELECT agent_id, final_return_pct FROM round_states "

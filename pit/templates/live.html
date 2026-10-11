@@ -56,6 +56,7 @@
 <div class="sessbar">
   <div class="row">
     {% if data.timing %}
+      {% if data.round.market_now %}<span title="this is a replay of a past trading day, compressed into a few minutes; times on this page are that day's market time (New York)"><span class="k">replayed market time</span><span class="mono">{{ data.round.market_now[:10] }} {{ data.round.market_now[11:16] }} ET</span></span>{% endif %}
       <span><span class="k">elapsed</span><span class="mono">{{ data.timing.elapsed }}</span></span>
       <span><span class="k">remaining</span><span class="mono">{{ data.timing.remaining }}</span></span>
       {% if data.timing.next_wake and data.is_live %}

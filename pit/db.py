@@ -86,6 +86,9 @@ _COLUMN_ADDITIONS = [
     ("guidelines", "retired_reason", "TEXT"),
     ("guideline_proposals", "spec", "TEXT"),
     ("guideline_proposals", "evidence", "TEXT"),
+    # replay clock {start_wall, speed, sim_start, sim_end} (ET) so the
+    # dashboard can show a replayed day's own market time, not wall time
+    ("rounds", "replay_anchor", "TEXT"),
 ]
 
 
