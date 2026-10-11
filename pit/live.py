@@ -259,6 +259,16 @@ def _risk_view(rnd, config) -> dict:
                                  - datetime.now()).total_seconds() / 60, 1))
     except (KeyError, IndexError, ValueError):
         pass
+    if replay._STATE:
+        # a replay compresses a whole session into a few wall-clock minutes;
+        # agents saw "11 minutes left" and rushed all-in. Speak market time.
+        return {"portfolio_stop_pct": forward.round_stop_pct(rnd, config),
+                "take_profit_pct": rnd["goal_pct"],
+                "replayed_session": str(replay._STATE.get("day")),
+                "market_time_now": (replay.sim_now().strftime("%H:%M") + " (exchange data tz)"
+                                    if replay.sim_now() else None),
+                "market_minutes_left_in_session": replay.sim_minutes_left(),
+                "expected_1sigma_move_over_session_pct": _row_get(rnd, "sigma_pct")}
     return {"portfolio_stop_pct": forward.round_stop_pct(rnd, config),
             "take_profit_pct": rnd["goal_pct"], "minutes_left": left,
             "expected_1sigma_move_over_round_pct": _row_get(rnd, "sigma_pct")}

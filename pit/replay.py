@@ -20,6 +20,8 @@ from . import market
 
 _ORIGINAL_QUOTE = None
 _ORIGINAL_SCAN = None
+_ORIGINAL_HISTORY = None
+_HIST_CACHE: dict = {}
 _STATE: dict = {}
 
 
@@ -117,7 +119,7 @@ def start(tickers: list[str] | None = None, day: date | None = None,
     full, clean session) rather than whatever ticker an agent happens to look
     up first — that used to occasionally pin the whole session's clock to a
     thinly-traded stock's narrow, sparse data window."""
-    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN
+    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN, _ORIGINAL_HISTORY
     day = day or _last_trading_day()
     series = load_day(tickers, day)
     compress = compress_minutes or int(os.getenv("PIT_REPLAY_MINUTES", "20"))
@@ -139,8 +141,11 @@ def start(tickers: list[str] | None = None, day: date | None = None,
     if _ORIGINAL_QUOTE is None:
         _ORIGINAL_QUOTE = market.quote
         _ORIGINAL_SCAN = market.scan_full_market
+        _ORIGINAL_HISTORY = market.history
     market.quote = _replay_quote  # type: ignore
     market.scan_full_market = _replay_scan  # type: ignore
+    market.history = _replay_history  # type: ignore
+    _HIST_CACHE.clear()
     print(f"[replay] unbiased ticker discovery for {day}: agents name symbols; "
           f"bars load on demand, session compressed to ~{compress} wall-clock "
           f"minutes (clock starts on the first ticker looked up).", flush=True)
@@ -159,12 +164,14 @@ def _anchor_clock(sim_start: datetime, sim_end: datetime) -> None:
 
 
 def stop() -> None:
-    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN
+    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN, _ORIGINAL_HISTORY
     if _ORIGINAL_QUOTE is not None:
         market.quote = _ORIGINAL_QUOTE
         market.scan_full_market = _ORIGINAL_SCAN
+        market.history = _ORIGINAL_HISTORY
         _ORIGINAL_QUOTE = None
         _ORIGINAL_SCAN = None
+        _ORIGINAL_HISTORY = None
     _STATE.clear()
 
 
@@ -227,12 +234,53 @@ def _replay_quote(ticker: str) -> dict | None:
             _STATE["missing"].add(t)
     now = sim_now()
     if not series or not now:
-        return _ORIGINAL_QUOTE(ticker) if _ORIGINAL_QUOTE else None
+        # never fall back to today's live quote: that's a price from the
+        # future relative to the replayed session
+        return None
     price = _price_at(series, now)
     prev = series[0][1]
     return {"ticker": t, "price": price, "prev_close": prev,
             "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0,
             "asof": now.strftime("%H:%M")}
+
+
+def _replay_history(ticker: str, days: int = 30) -> list[tuple[str, float]]:
+    """Daily closes strictly BEFORE the replayed day, plus the replayed day's
+    price so far as the last point. The live history call returns today's
+    data — in a replay of a past day that leaked the day's own close (agents
+    saw PLTR's +5.2% before the session had played it out)."""
+    import datetime as _dt
+    t = ticker.upper().strip()
+    day = _STATE.get("day")
+    if not day:
+        return []
+    if t not in _HIST_CACHE:
+        rows: list[tuple[str, float]] = []
+        try:
+            import yfinance as yf
+            df = yf.download(t, start=(day - _dt.timedelta(days=int(days * 1.6) + 10)).isoformat(),
+                             end=day.isoformat(), interval="1d", progress=False,
+                             auto_adjust=True, timeout=30, threads=False)
+            close = df["Close"]
+            if hasattr(close, "columns"):
+                close = close[t] if t in close.columns else close.iloc[:, 0]
+            rows = [(d.strftime("%Y-%m-%d"), round(float(v), 4))
+                    for d, v in close.dropna().items() if d.date() < day]
+        except Exception:
+            rows = []
+        _HIST_CACHE[t] = rows
+    out = list(_HIST_CACHE[t][-days:])
+    q = _replay_quote(t)
+    if q and q.get("price"):
+        out.append((f"{day.isoformat()} {q['asof']} (now)", q["price"]))
+    return out
+
+
+def sim_minutes_left() -> float | None:
+    now = sim_now()
+    if not now or not _STATE.get("sim_end"):
+        return None
+    return max(0.0, round((_STATE["sim_end"] - now).total_seconds() / 60, 1))
 
 
 def _price_at(series: list[tuple[datetime, float]], now: datetime) -> float:
