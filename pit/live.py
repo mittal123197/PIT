@@ -417,6 +417,14 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
 
 
 def _tick_body(conn, config, rnd, tick, verbose, debug=False):
+    # A replayed session that has already reached its close has nothing left
+    # to trade: agents used to wake once more "after the bell", spend an LLM
+    # call reasoning that "orders hit next session", and learn nothing.
+    if replay._STATE and replay.sim_minutes_left() is not None \
+            and replay.sim_minutes_left() <= 1:
+        if verbose:
+            print("  [replay] session closed — no more decisions this round", flush=True)
+        return
     price = _price_fn()
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
