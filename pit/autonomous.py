@@ -79,8 +79,8 @@ Order mechanics: buys and sells execute immediately at the current price when \
 you decide. EVERY buy automatically carries a stop-loss: if that position later \
 falls a set % below your average entry it is sold for you, even while you \
 sleep. The default distance is sized to each asset's own volatility over this \
-round's length (about 2x its typical move — the autoStop% column when you have \
-a data table; otherwise """ + f"{DEFAULT.position_stop_loss_pct:g}" + """%); \
+round's length (about 2x its typical move; shown as the autoStop% column when \
+you have a data table, and on each of your positions as stop_pct); \
 you may set your own per buy with "stop_loss_pct" (0.5–20) — tighter or looser \
 is your call. There are no limit or take-profit orders, and nothing else \
 persists between wake-ups. Each of your positions shows its entry and its \

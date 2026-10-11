@@ -123,6 +123,28 @@ def _download_daily(symbols: list[str]):
     return frames
 
 
+def daily_vols(symbols: list[str], end_day) -> dict[str, float]:
+    """20-day std of daily returns (%) per symbol using only bars BEFORE
+    `end_day` — for a replayed session, so the bands don't peek at that day."""
+    import datetime as _dt
+    import yfinance as yf
+    start = end_day - _dt.timedelta(days=60)
+    out: dict[str, float] = {}
+    for i in range(0, len(symbols), 50):
+        df = yf.download(symbols[i:i + 50], start=start.isoformat(), end=end_day.isoformat(),
+                         interval="1d", progress=False, auto_adjust=True, timeout=30,
+                         threads=False)
+        if df is None or df.empty:
+            continue
+        close = df["Close"]
+        for s in symbols[i:i + 50]:
+            if s in close.columns:
+                r = close[s].dropna().pct_change().dropna().iloc[-20:]
+                if len(r) >= 10:
+                    out[s] = round(float(r.std()) * 100, 2)
+    return out
+
+
 # ---- the table -----------------------------------------------------------
 
 _HEADER = ("TICKER|sector|price|1d%|5d%|20d%|vs20dMA%|vs50dMA%|RSI14|52wk-pos%|"

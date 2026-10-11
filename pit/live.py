@@ -276,14 +276,26 @@ def _set_risk_bands(conn, config, rnd, minutes, verbose) -> None:
     universe's real volatility (pit/risk.py). Without volatility data (replay,
     or a universe with no brief) the flat config bands stay in force."""
     risk.clear()
-    if replay._STATE or not brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
-        return
-    try:
-        b = brief_mod.get_brief(market.TRADE_UNIVERSE_MODE)
-    except Exception:
-        b = None
-    vols = {s: f.get("dvol") for s, f in ((b or {}).get("features") or {}).items()}
     mkt = "crypto" if market.TRADE_UNIVERSE_MODE == "crypto" else "us"
+    if replay._STATE:
+        # a replay compresses one whole trading session: the horizon is the
+        # session (390 min), volatility from the days BEFORE the replayed one
+        if market.TRADE_UNIVERSE_MODE == "full":
+            return
+        try:
+            vols = brief_mod.daily_vols(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
+                                        replay._STATE["day"])
+        except Exception:
+            return
+        minutes = risk.minutes_per_day(mkt)
+    else:
+        if not brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
+            return
+        try:
+            b = brief_mod.get_brief(market.TRADE_UNIVERSE_MODE)
+        except Exception:
+            b = None
+        vols = {s: f.get("dvol") for s, f in ((b or {}).get("features") or {}).items()}
     bd = risk.bands(vols, minutes, mkt, config.risk_reward_ratio)
     if not bd:
         return
@@ -294,7 +306,7 @@ def _set_risk_bands(conn, config, rnd, minutes, verbose) -> None:
     conn.commit()
     if verbose:
         st = sorted(bd["auto_stops"].values())
-        print(f"[risk] {minutes}-min round: typical move ±{bd['sigma']:.2f}% (1σ) → "
+        print(f"[risk] {minutes}-min {'replayed session' if replay._STATE else 'round'}: typical move ±{bd['sigma']:.2f}% (1σ) → "
               f"portfolio stop −{bd['stop']:.2f}%, take-profit +{bd['goal']:.2f}%, "
               f"position stops {st[0]:.2f}–{st[-1]:.2f}% by asset volatility",
               flush=True)
