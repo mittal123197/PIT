@@ -563,8 +563,26 @@ def buy_outcomes(conn, round_id: int | None = None,
         if not exit_px or not b["price"]:
             continue
         out.append({"symbol": b["symbol"], "features": json.loads(b["features"]),
-                    "ret": (exit_px / b["price"] - 1) * 100})
-    return out
+                    "ret": (exit_px / b["price"] - 1) * 100,
+                    "round_id": b["round_id"], "agent_id": b["agent_id"]})
+    return _dedupe(out)
+
+
+def _dedupe(outcomes: list[dict]) -> list[dict]:
+    """One data point per (round, agent, symbol): an agent adding to the same
+    name three times in a round is one idea, not three independent trials —
+    counting each add inflated n and the t-stat."""
+    seen = {}
+    for r in outcomes:
+        k = (r.get("round_id"), r.get("agent_id"), r["symbol"])
+        if k not in seen:
+            seen[k] = r
+    return list(seen.values())
+
+
+def _min_rounds() -> int:
+    import os
+    return int(os.getenv("PIT_RULE_MIN_ROUNDS", "2"))
 
 
 def backtest(spec: dict, practice: str, outcomes: list[dict]) -> dict:
@@ -584,7 +602,11 @@ def backtest(spec: dict, practice: str, outcomes: list[dict]) -> dict:
           "avg_other": round(stx.mean(o), 3) if o else None,
           "win_rate_match": round(sum(x > 0 for x in m) / len(m) * 100) if m else None}
     n = _min_trades()
-    if len(m) < n or len(o) < n:
+    m_rounds = {r.get("round_id") for r in outcomes if _matches(spec, r["features"]) is True}
+    ev["rounds"] = len(m_rounds)
+    if len(m) < n or len(o) < n or len(m_rounds) < _min_rounds():
+        # one 30-minute window is one market regime: everything bought in
+        # the same minutes moves together, so it can't prove a rule
         ev.update(t=None, verdict="untested")
         return ev
     se = math.sqrt(stx.variance(m) / len(m) + stx.variance(o) / len(o)) or 1e-9
@@ -629,7 +651,8 @@ def evidence_label(ev: dict | None) -> str:
         return "unverifiable (legacy free-text rule)"
     if ev["verdict"] == "untested":
         return (f"untested — {ev['n_match']} matching / {ev['n_other']} other buys "
-                f"so far, need {_min_trades()} each")
+                f"across {ev.get('rounds', '?')} round(s); need {_min_trades()} each "
+                f"from at least {_min_rounds()} rounds")
     return (f"{ev['verdict']} — {ev['n_match']} matching buys avg {ev['avg_match']:+.2f}% "
             f"(win {ev['win_rate_match']}%) vs {ev['n_other']} others avg "
             f"{ev['avg_other']:+.2f}%, t={ev['t']:+.2f}")
@@ -659,6 +682,10 @@ def review_rules(conn) -> list[dict]:
                          (_now(), "ledger contradicts it: " + evidence_label(ev), g["id"]))
             events.append({"action": "retired", "text": g["text"], "practice": g["practice"],
                            "evidence": ev})
+        elif ev["verdict"] == "untested" and g.get("tier") == "proven":
+            conn.execute("UPDATE guidelines SET tier='probation' WHERE id=?", (g["id"],))
+            events.append({"action": "demoted to probation", "text": g["text"],
+                           "practice": g["practice"], "evidence": ev})
         elif ev["verdict"] == "supported" and g.get("tier") != "proven":
             conn.execute("UPDATE guidelines SET tier='proven' WHERE id=?", (g["id"],))
             events.append({"action": "proven", "text": g["text"], "practice": g["practice"],

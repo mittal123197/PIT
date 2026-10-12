@@ -17,21 +17,30 @@ def _conn():
     return c
 
 
-def _ledger(c, rsi_low_ret: float, rsi_high_ret: float, n: int = 6):
+def _ledger(c, rsi_low_ret: float, rsi_high_ret: float, n: int = 6, rounds: int = 2):
     """n buys at RSI 25 that returned rsi_low_ret (± noise) and n at RSI 60
-    that returned rsi_high_ret — each closed by a later sell."""
-    rid = forward.start_round(c, ArenaConfig(), days=0)
-    aid = c.execute("SELECT agent_id FROM round_states WHERE round_id=?", (rid,)).fetchone()[0]
-    for i in range(n):
-        for rsi, ret in ((25, rsi_low_ret), (60, rsi_high_ret)):
-            r = ret + (0.1 if i % 2 else -0.1)
-            c.execute("INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty, price, "
-                      "capital_after, features) VALUES (?,?,?,?, 'buy', 1, 100, 0, ?)",
-                      (rid, aid, "t", f"S{rsi}{i}", json.dumps({"rsi": rsi, "d1": 1.0})))
-            c.execute("INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty, price, "
-                      "capital_after) VALUES (?,?,?,?, 'sell', 1, ?, 0)",
-                      (rid, aid, "t", f"S{rsi}{i}", 100 * (1 + r / 100)))
+    that returned rsi_high_ret — each closed by a later sell — spread over
+    `rounds` separate rounds (a rule needs evidence from 2+ rounds)."""
+    for rr in range(rounds):
+        rid = forward.start_round(c, ArenaConfig(), days=0)
+        aid = c.execute("SELECT agent_id FROM round_states WHERE round_id=?", (rid,)).fetchone()[0]
+        for i in range(rr, n, rounds):
+            for rsi, ret in ((25, rsi_low_ret), (60, rsi_high_ret)):
+                r = ret + (0.1 if i % 2 else -0.1)
+                c.execute("INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty, price, "
+                          "capital_after, features) VALUES (?,?,?,?, 'buy', 1, 100, 0, ?)",
+                          (rid, aid, "t", f"S{rsi}{i}", json.dumps({"rsi": rsi, "d1": 1.0})))
+                c.execute("INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty, price, "
+                          "capital_after) VALUES (?,?,?,?, 'sell', 1, ?, 0)",
+                          (rid, aid, "t", f"S{rsi}{i}", 100 * (1 + r / 100)))
+        c.execute("UPDATE rounds SET status='resolved' WHERE id=?", (rid,))
     c.commit()
+
+
+def test_one_round_of_evidence_is_not_proof(monkeypatch):
+    c = _conn(); _ledger(c, 1.0, -1.0, n=6, rounds=1)
+    ev = g.backtest(g.parse_spec([["RSI14", "<", 30]]), "good", g.buy_outcomes(c))
+    assert ev["verdict"] == "untested" and ev["rounds"] == 1
 
 
 def _fake(proposals: dict, votes: dict, asked: list):
@@ -99,7 +108,6 @@ def test_free_text_and_unknown_fields_are_not_rules(monkeypatch):
 
 def test_review_retires_a_rule_the_ledger_turns_against(monkeypatch):
     c = _conn(); _ledger(c, 1.0, -1.0, n=2)
-    c.execute("UPDATE rounds SET status='resolved'")
     monkeypatch.setattr(g, "_ask_json", _fake(
         {"RONIN": RSI_DO}, {("LYNX", "RSI14"): {"vote": "agree"},
                             ("VIPER", "RSI14"): {"vote": "agree"}}, []))
