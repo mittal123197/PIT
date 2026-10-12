@@ -42,3 +42,11 @@ def test_scan_is_an_unranked_alphabetical_sample(monkeypatch):
     r = market.scan_full_market(n=3)
     assert "gainers" not in r and "losers" not in r
     assert [x["ticker"] for x in r["sample"]] == ["AAA", "MMM", "ZZZ"]   # alphabetical, not by change_pct
+
+
+def test_rival_lessons_pass_on_the_principle_not_the_ticker(monkeypatch):
+    from pit import forward, guidelines
+    monkeypatch.setattr(guidelines, "_universe_symbols", lambda: {"META", "CRM", "XOM"})
+    out = forward._redact_tickers("CRM/META were green; keep RSI<65, skip XOM.")
+    assert "META" not in out and "CRM" not in out and "XOM" not in out
+    assert "RSI<65" in out

@@ -914,12 +914,13 @@ def _recent_messages(conn, round_id, agent_id, limit=4,
     rival_lineages = {r["lineage_id"] for r in rivals}
     placeholders = ",".join("?" * len(rival_ids))
     rows = conn.execute(
-        f"SELECT m.message, l.name FROM agent_messages m "
+        f"SELECT m.message, m.kind, l.name FROM agent_messages m "
         f"JOIN agents a ON a.id=m.agent_id JOIN lineages l ON l.id=a.lineage_id "
         f"WHERE m.round_id=? AND m.agent_id IN ({placeholders}) "
         f"ORDER BY m.id DESC LIMIT ?",
         (round_id, *rival_ids, limit)).fetchall()
-    msgs = [f"{r['name']}: {r['message']}" for r in reversed(rows)]
+    msgs = [f"{r['name']}: " + (_redact_tickers(r["message"]) if r["kind"] == "lesson"
+                                 else r["message"]) for r in reversed(rows)]
     if this_round_only:   # replay: lessons from earlier rounds may know how the day ends
         return msgs
     for lineage_id in rival_lineages:
@@ -929,10 +930,28 @@ def _recent_messages(conn, round_id, agent_id, limit=4,
             "WHERE a.lineage_id=? AND m.kind='lesson' ORDER BY m.id DESC LIMIT 1",
             (lineage_id,)).fetchone()
         if last_lesson:
-            tag = f"{last_lesson['name']}: {last_lesson['message']}"
+            tag = f"{last_lesson['name']}: {_redact_tickers(last_lesson['message'])}"
             if tag not in msgs:
                 msgs.append(tag)
     return msgs
+
+
+def _redact_tickers(text: str) -> str:
+    """A rival's lesson should pass on the PRINCIPLE, not the pick. Lessons
+    like "CRM/META/INTU were green at close" became tips: next round all three
+    agents opened in META and CRM (100% book overlap). Ticker symbols from the
+    tradeable universe are replaced with "[a stock]"; the agent's own notes
+    are untouched."""
+    import re
+    try:
+        from .guidelines import _universe_symbols
+        syms = _universe_symbols()
+    except Exception:
+        syms = set()
+    if not syms:
+        return text
+    return re.sub(r"\b[A-Z][A-Z0-9.\-]{0,9}\b",
+                  lambda m: "[a stock]" if m.group(0) in syms else m.group(0), text)
 
 
 def _name(conn, agent_id) -> str:
