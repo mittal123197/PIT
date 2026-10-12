@@ -478,7 +478,12 @@ def _min_trades() -> int:
     return int(os.getenv("PIT_RULE_MIN_TRADES", "5"))
 
 
-_T_SUPPORT = 1.0   # |t| at which the ledger counts as taking a side
+# Adoption needs strong evidence (t >= 2, ~95%): several proposals are tested
+# every round, so a t of 1 "proved" coincidences (a rule went in at t=+1.00).
+# A veto needs less (t <= -1): rejecting a rule costs little, adopting a
+# wrong one binds every agent.
+_T_SUPPORT = 2.0
+_T_CONTRA = 1.0
 
 
 def _min_probation() -> int:
@@ -613,7 +618,7 @@ def backtest(spec: dict, practice: str, outcomes: list[dict]) -> dict:
     edge = (stx.mean(m) - stx.mean(o)) * (1 if practice == "good" else -1)
     t = round(edge / se, 2)
     ev.update(t=t, verdict=("supported" if t >= _T_SUPPORT else
-                            "contradicted" if t <= -_T_SUPPORT else "inconclusive"))
+                            "contradicted" if t <= -_T_CONTRA else "inconclusive"))
     return ev
 
 
@@ -682,7 +687,7 @@ def review_rules(conn) -> list[dict]:
                          (_now(), "ledger contradicts it: " + evidence_label(ev), g["id"]))
             events.append({"action": "retired", "text": g["text"], "practice": g["practice"],
                            "evidence": ev})
-        elif ev["verdict"] == "untested" and g.get("tier") == "proven":
+        elif ev["verdict"] in ("untested", "inconclusive") and g.get("tier") == "proven":
             conn.execute("UPDATE guidelines SET tier='probation' WHERE id=?", (g["id"],))
             events.append({"action": "demoted to probation", "text": g["text"],
                            "practice": g["practice"], "evidence": ev})
