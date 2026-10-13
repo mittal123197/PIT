@@ -136,3 +136,29 @@ def test_mirror_of_an_active_rule_is_vetoed(monkeypatch):
         {"VIPER": mirror}, {("LYNX", "RSI14"): {"vote": "agree"}}, []))
     res = [r for r in g.pool_constitution(c, ArenaConfig(), None) if r.get("kind")]
     assert res[0]["resolution"] == "vetoed" and "same trades" in res[0]["note"]
+
+
+def test_exit_rule_is_backtested_against_holding(monkeypatch):
+    """Quick flat sells (pos_pnl ~0, held < 15 min) that holding would have
+    beaten -> an AVOID-selling rule is supported by the ledger."""
+    c = _conn()
+    for rr in range(2):
+        rid = forward.start_round(c, ArenaConfig(), days=0)
+        aid = c.execute("SELECT agent_id FROM round_states WHERE round_id=?", (rid,)).fetchone()[0]
+        ends = {}
+        for i in range(6):
+            quick = f"Q{rr}{i}"; slow = f"S{rr}{i}"
+            # quick flat sells at 100, deadline 101 -> selling cost 1%
+            c.execute("INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty, price, capital_after, reason, features) VALUES (?,?,?,?, 'sell', 1, 100, 0, 'rotate', ?)",
+                      (rid, aid, "t", quick, json.dumps({"pos_pnl": 0.1, "held_min": 5 + i % 2})))
+            ends[quick] = 101.0 + (0.1 if i % 2 else -0.1)
+            # patient sells at 100, deadline 99 -> selling saved 1%
+            c.execute("INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty, price, capital_after, reason, features) VALUES (?,?,?,?, 'sell', 1, 100, 0, 'trend broke', ?)",
+                      (rid, aid, "t", slow, json.dumps({"pos_pnl": 0.1, "held_min": 60 + i})))
+            ends[slow] = 99.0 + (0.1 if i % 2 else -0.1)
+        c.execute("UPDATE rounds SET status='resolved', end_prices=? WHERE id=?", (json.dumps(ends), rid))
+    c.commit()
+    spec = g.parse_spec([["held_min", "<", 15]], "sell")
+    assert g.spec_text(spec, "bad") == "selling when held_min < 15"
+    ev = g.backtest(spec, "bad", g.outcomes_for(c, spec))
+    assert ev["verdict"] == "supported" and ev["rounds"] == 2

@@ -82,8 +82,8 @@ round's length (about 2x its typical move; shown as the autoStop% column when \
 you have a data table, and on each of your positions as stop_pct); \
 you may set your own per buy with "stop_loss_pct" (0.5–20) — tighter or looser \
 is your call. There are no limit or take-profit orders, and nothing else \
-persists between wake-ups. Each of your positions shows its entry and its \
-stop distance.
+persists between wake-ups. Each of your positions shows its entry, its \
+stop distance, pos_pnl (its P&L % vs your entry) and held_min (minutes held).
 
 Hard rules, both enforced automatically (you don't have to act on them, but \
 you can't stop them): (1) a PORTFOLIO stop-loss liquidates your entire book if \

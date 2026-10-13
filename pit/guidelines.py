@@ -337,7 +337,8 @@ def _llm_vote(lin, proposal):
 # path: a single neutral "summarizer" model deciding what the pool learned,
 # and a fallback vote rule that made winners reflexively reject new rules.
 
-ARENA_FACTS = ("Arena facts: long-only paper trading (no leverage, no shorting, "
+ARENA_FACTS = ("Arena facts: every fill pays half the bid/ask spread; "
+               "long-only paper trading (no leverage, no shorting, "
                "no options); orders are immediate buys/sells at the current price; "
                "every buy automatically carries a per-position stop-loss (default "
                "distance, or the agent's own stop_loss_pct set on the buy); there "
@@ -492,15 +493,20 @@ def _min_probation() -> int:
     return int(os.getenv("PIT_RULE_MIN_PROBATION", "2"))
 
 
-def _rule_fields() -> dict:
+POSITION_FIELDS = {"pos_pnl%": "pos_pnl", "held_min": "held_min"}
+
+
+def _rule_fields(action: str = "buy") -> dict:
     from .brief import RULE_FIELDS
-    return RULE_FIELDS
+    return dict(RULE_FIELDS, **POSITION_FIELDS) if action == "sell" else RULE_FIELDS
 
 
-def parse_spec(when) -> dict | None:
+def parse_spec(when, action: str = "buy") -> dict | None:
     """[{"field","op","value"}, ...] or [[f, op, v], ...] -> {"when": [[f, op, v]]}
-    — 1 to 3 conditions over the data-table columns, else None."""
-    fields = _rule_fields()
+    — 1 to 3 conditions over the data-table columns (plus, for an exit rule,
+    the position's pos_pnl% and held_min), else None."""
+    action = "sell" if action == "sell" else "buy"
+    fields = _rule_fields(action)
     if not isinstance(when, list) or not 1 <= len(when) <= 3:
         return None
     out = []
@@ -517,16 +523,18 @@ def parse_spec(when) -> dict | None:
         except (TypeError, ValueError):
             return None
         out.append([f, op, v])
-    return {"when": out}
+    return {"when": out, "action": action} if action == "sell" else {"when": out}
 
 
 def spec_text(spec: dict, practice: str) -> str:
     cond = " and ".join(f"{f} {op} {v:g}" for f, op, v in spec["when"])
-    return f"buy when {cond}" if practice == "good" else f"buying when {cond}"
+    verb = spec.get("action", "buy")
+    return (f"{verb} when {cond}" if practice == "good"
+            else f"{'selling' if verb == 'sell' else 'buying'} when {cond}")
 
 
 def _matches(spec: dict, feat: dict) -> bool | None:
-    fields = _rule_fields()
+    fields = _rule_fields(spec.get("action", "buy"))
     for f, op, v in spec["when"]:
         x = feat.get(fields[f])
         if x is None:
@@ -571,6 +579,46 @@ def buy_outcomes(conn, round_id: int | None = None,
                     "ret": (exit_px / b["price"] - 1) * 100,
                     "round_id": b["round_id"], "agent_id": b["agent_id"]})
     return _dedupe(out)
+
+
+def sell_outcomes(conn, round_id: int | None = None,
+                  lineage_id: int | None = None) -> list[dict]:
+    """Every sell the AGENT chose (not stops / deadline) with the data row and
+    position state at that moment, scored against holding to the deadline:
+    ret = (sell price / deadline price - 1) * 100 — positive = the sell beat
+    holding. The same backtest then judges exit rules like entry rules."""
+    from .forward import is_forced
+    q = """SELECT t.round_id, t.agent_id, t.symbol, t.price, t.reason, t.features, r.end_prices
+           FROM trades t JOIN agents a ON a.id = t.agent_id JOIN rounds r ON r.id = t.round_id
+           WHERE t.side='sell' AND t.features IS NOT NULL AND r.end_prices IS NOT NULL"""
+    args: list = []
+    if round_id is not None:
+        q += " AND t.round_id=?"
+        args.append(round_id)
+    if lineage_id is not None:
+        q += " AND a.lineage_id=?"
+        args.append(lineage_id)
+    out = []
+    for r in conn.execute(q + " ORDER BY t.id", args).fetchall():
+        if is_forced(r["reason"]):
+            continue
+        end = json.loads(r["end_prices"] or "{}").get(r["symbol"])
+        if not end or not r["price"]:
+            continue
+        out.append({"symbol": r["symbol"], "features": json.loads(r["features"]),
+                    "ret": (r["price"] / end - 1) * 100,
+                    "round_id": r["round_id"], "agent_id": r["agent_id"]})
+    return _dedupe(out)
+
+
+def outcomes_for(conn, spec: dict | None, cache: dict | None = None) -> list[dict]:
+    action = (spec or {}).get("action", "buy")
+    if cache is not None and action in cache:
+        return cache[action]
+    out = sell_outcomes(conn) if action == "sell" else buy_outcomes(conn)
+    if cache is not None:
+        cache[action] = out
+    return out
 
 
 def _dedupe(outcomes: list[dict]) -> list[dict]:
@@ -644,7 +692,10 @@ def _duplicate_of(p: dict, active: list[dict], outcomes: list[dict],
     for g in active:
         if not g.get("spec"):
             continue
-        gm, go = _match_ids(json.loads(g["spec"]), outcomes)
+        gspec = json.loads(g["spec"])
+        if gspec.get("action", "buy") != p["spec"].get("action", "buy"):
+            continue
+        gm, go = _match_ids(gspec, outcomes)
         other = gm if g["practice"] == p["practice"] else go
         if other and len(new_m & other) / len(new_m | other) >= thresh:
             return f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}"
@@ -666,13 +717,13 @@ def evidence_label(ev: dict | None) -> str:
 def review_rules(conn) -> list[dict]:
     """Re-test every active rule against the ledger: retire the ones the data
     now contradicts, promote probation rules it supports."""
-    outcomes = buy_outcomes(conn)
+    cache: dict = {}
     events = []
     for g in active_guidelines(conn):
         if not g.get("spec"):
             continue
         spec = json.loads(g["spec"])
-        ev = backtest(spec, g["practice"], outcomes)
+        ev = backtest(spec, g["practice"], outcomes_for(conn, spec, cache))
         conn.execute("UPDATE guidelines SET evidence=? WHERE id=?", (json.dumps(ev), g["id"]))
         if ev["verdict"] == "inconclusive" and g.get("tier") != "proven":
             # a probation rule that now has enough trades and still shows no edge
@@ -701,9 +752,11 @@ def review_rules(conn) -> list[dict]:
 
 def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = None,
                    symbols: set[str] | None = None,
-                   my_buys: list[dict] | None = None) -> dict | None:
+                   my_buys: list[dict] | None = None,
+                   my_sells: list[dict] | None = None) -> dict | None:
     cfg = _lineage_cfg(lin)
     fields = list(_rule_fields())
+    sell_fields = list(_rule_fields("sell"))
     data = _ask_json(cfg.get("model"),
         "You are a trading agent helping write your pool's shared rulebook. JSON only.",
         {"you": lin["name"], "your_record": f"{lin['wins']}W-{lin['losses']}L",
@@ -713,6 +766,10 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
              {"symbol": b["symbol"], "outcome_pct": round(b["ret"], 3),
               **{f: b["features"].get(k) for f, k in _rule_fields().items()}}
              for b in (my_buys or [])][:20],
+         "your_own_sells_last_round_with_the_data_you_saw_and_edge": [
+             {"symbol": x["symbol"], "sell_vs_holding_to_deadline_pct": round(x["ret"], 3),
+              **{f: x["features"].get(k) for f, k in _rule_fields("sell").items()}}
+             for x in (my_sells or [])][:20],
          "arena": ARENA_FACTS,
          "current_rules": [{"id": g["id"],
                             "rule": f"{'DO' if g['practice'] == 'good' else 'AVOID'}: {g['text']}",
@@ -720,16 +777,20 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
                            for g in active],
          "instruction": (
              "Propose at most ONE change to the rulebook every agent will follow. "
-             "Rules are ENTRY rules over the data-table columns, and the arena "
-             "will BACKTEST yours against every buy the pool has logged — a rule "
-             "the data contradicts is rejected automatically, so propose only a "
-             "pattern your own buys above actually show. Either a DO (practice "
-             "'good': buying when the condition holds tends to work) or an AVOID "
-             "(practice 'bad': buying when it holds tends to lose). Conditions: "
-             f"1-3 of [field, op, value], field one of {fields}, op one of "
-             "<, <=, >, >=. Or remove a current rule your experience contradicts. "
-             "Most rounds deserve no new rule — say none if nothing is clear. "
-             "Return JSON {\"kind\":\"add\"|\"remove\"|\"none\",\"practice\":\"good\"|\"bad\","
+             "A rule is either an ENTRY rule (action 'buy': when to buy / not buy) "
+             "or an EXIT rule (action 'sell': when to sell / not sell an open "
+             "position). The arena BACKTESTS it against every logged trade — "
+             "entries by their outcome, sells against simply holding to the "
+             "deadline — and a rule the data contradicts is rejected "
+             "automatically, so propose only a pattern your own trades above "
+             "actually show. DO (practice 'good': doing it tends to work) or "
+             "AVOID (practice 'bad': doing it tends to cost). Conditions: 1-3 of "
+             f"[field, op, value]; entry fields {fields}; exit fields {sell_fields} "
+             "(pos_pnl% = the position's P&L vs its entry, held_min = minutes "
+             "held); op one of <, <=, >, >=. Or remove a current rule your "
+             "experience contradicts. Most rounds deserve no new rule — say none "
+             "if nothing is clear. Return JSON {\"kind\":\"add\"|\"remove\"|\"none\","
+             "\"action\":\"buy\"|\"sell\",\"practice\":\"good\"|\"bad\","
              "\"when\":[[\"RSI14\",\"<\",30]],\"remove_id\":N,\"why\":\"...\"}")})
     if not data or data.get("kind") not in ("add", "remove"):
         return None
@@ -746,7 +807,7 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
                 "guideline_id": gid, "proposer": lin["name"],
                 "spec": json.loads(g["spec"]) if g.get("spec") else None,
                 "evidence": str(data.get("why", ""))[:300]}
-    spec = parse_spec(data.get("when"))
+    spec = parse_spec(data.get("when"), data.get("action", "buy"))
     if not spec:
         return None
     practice = "bad" if data.get("practice") == "bad" else "good"
@@ -788,7 +849,7 @@ def _agent_vote(lin: dict, proposal: dict, active: list[str],
 def _spec_key(p: dict):
     if p["kind"] == "remove":
         return ("rm", p["guideline_id"])
-    return (p["practice"], json.dumps(sorted(p["spec"]["when"])))
+    return (p["practice"], p["spec"].get("action", "buy"), json.dumps(sorted(p["spec"]["when"])))
 
 
 def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) -> list[dict]:
@@ -806,11 +867,15 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
     trades = {l["id"]: _round_trades(conn, source_round_id, l["id"]) for l in lineages}
     my_buys = {l["id"]: (buy_outcomes(conn, source_round_id, l["id"])
                          if source_round_id is not None else []) for l in lineages}
+    my_sells = {l["id"]: (sell_outcomes(conn, source_round_id, l["id"])
+                          if source_round_id is not None else []) for l in lineages}
     with ThreadPoolExecutor(max_workers=len(lineages)) as ex:
         raw = list(ex.map(lambda l: _agent_propose(l, active, trades[l["id"]], symbols,
-                                                   my_buys[l["id"]]), lineages))
+                                                   my_buys[l["id"]], my_sells[l["id"]]),
+                          lineages))
 
-    seen = {(g["practice"], json.dumps(sorted(json.loads(g["spec"])["when"])))
+    seen = {(g["practice"], json.loads(g["spec"]).get("action", "buy"),
+             json.dumps(sorted(json.loads(g["spec"])["when"])))
             for g in active if g.get("spec")}
     proposals, keys = [], set()
     for p in raw:
@@ -822,11 +887,12 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
         keys.add(k)
         proposals.append(p)
 
-    outcomes = buy_outcomes(conn)
+    ocache: dict = {}
     results = []
     for p in proposals[:config.max_proposals_per_round]:
         if p["kind"] == "add" and len(active_guidelines(conn)) >= config.max_active_guidelines:
             continue   # rulebook full — only removals can make room
+        outcomes = outcomes_for(conn, p.get("spec"), ocache)
         ledger = backtest(p["spec"], p["practice"], outcomes) if p.get("spec") else None
         pid = conn.execute(
             """INSERT INTO guideline_proposals

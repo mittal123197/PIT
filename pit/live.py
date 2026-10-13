@@ -479,6 +479,8 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
         positions = [{"ticker": t, "qty": q, "price": price(t),
                       "value": round(q * (price(t) or 0), 2),
                       "avg_entry": cb.get(t),
+                      **forward._position_state(conn, rnd["id"], aid, t, price(t) or 0,
+                                                forward.local_ts(), cb.get(t)),
                       "stop_pct": sp.get(t, risk.auto_stop(t, config.position_stop_loss_pct)),
                       "stop_price": (round(cb[t] * (1 - sp.get(t, risk.auto_stop(t, config.position_stop_loss_pct)) / 100), 8)
                                      if cb.get(t) else None)}

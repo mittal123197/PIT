@@ -292,6 +292,42 @@ def _stop_pct_for(order: dict, default: float) -> float:
 MIN_ORDER_USD = 1.0
 
 
+def _position_state(conn, round_id, agent_id, symbol, px, date, avg) -> dict:
+    """Where the position stood when the agent chose to sell it: P&L vs its
+    average entry and minutes held since the first buy this round — the
+    fields exit rules ('AVOID selling when pos_pnl% > -0.3 and held_min < 15')
+    are written over."""
+    out = {}
+    if avg:
+        out["pos_pnl"] = round((px / avg - 1) * 100, 3)
+    first = conn.execute("SELECT MIN(ts) t FROM trades WHERE round_id=? AND agent_id=? "
+                         "AND symbol=? AND side='buy'", (round_id, agent_id, symbol)).fetchone()
+    try:
+        from datetime import datetime
+        f = datetime.strptime(first["t"][:19], "%Y-%m-%d %H:%M:%S")
+        d = datetime.strptime(str(date)[:19], "%Y-%m-%d %H:%M:%S")
+        out["held_min"] = round((d - f).total_seconds() / 60, 1)
+    except Exception:
+        pass
+    return out
+
+
+def record_end_prices(conn, round_id, price) -> None:
+    """Every symbol traded this round, priced at the deadline — the yardstick
+    for 'was that sell better than holding?' (exit-rule backtests)."""
+    syms = [r[0] for r in conn.execute("SELECT DISTINCT symbol FROM trades WHERE round_id=?",
+                                       (round_id,)).fetchall()]
+    out = {}
+    for s_ in syms:
+        try:
+            v = price(s_)
+        except Exception:
+            v = None
+        if v:
+            out[s_] = v
+    conn.execute("UPDATE rounds SET end_prices=? WHERE id=?", (json.dumps(out), round_id))
+
+
 def _fill(px: float, side: str) -> float:
     """The price a fill actually gets: the quote plus/minus half the spread."""
     b = DEFAULT.spread_bps / 10_000
@@ -336,6 +372,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date,
     orders = ([o for o in orders if o.get("side") == "sell"] +
               [o for o in orders if o.get("side") == "buy"])
     _scale = None
+    sell_avg = None
     for o in orders:
         px = price(o["ticker"])
         if not px or px <= 0:
@@ -371,6 +408,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date,
                 stop_pcts[o["ticker"]] = _stop_pct_for(
                     o, risk.auto_stop(o["ticker"], DEFAULT.position_stop_loss_pct))
         else:  # sell
+            sell_avg = cost_basis.get(o["ticker"])
             held = holdings.get(o["ticker"], 0.0)
             qty = _floor_qty(o.get("qty", held) if "qty" in o
                              else ((_amount(o) or held * px) / px))
@@ -391,7 +429,10 @@ def _execute(conn, round_id, agent_id, st, orders, price, date,
             else:
                 holdings[o["ticker"]] = rem
                 # avg cost basis is unchanged by a partial sell
-        feat = (features or {}).get(o["ticker"]) if o["side"] == "buy" else None
+        feat = (features or {}).get(o["ticker"])
+        if o["side"] == "sell" and feat is not None:
+            feat = dict(feat, **_position_state(conn, round_id, agent_id, o["ticker"],
+                                                 px, date, sell_avg))
         conn.execute(
             """INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty,
                price, capital_after, reason, features) VALUES (?,?,?,?,?,?,?,?,?,?)""",
@@ -468,6 +509,7 @@ def close_out_all_positions(conn, round_id, agent_id, st, price, date,
         px = price(ticker)
         if not px or px <= 0:
             continue  # can't close without a price; leave it (rare, e.g. delisted)
+        px = _fill(px, "sell")
         cash += qty * px
         conn.execute(
             """INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty,
@@ -533,6 +575,7 @@ def _resolve(conn, rnd, config, price) -> dict:
     is a loser and self-critiques into a new generation (explicit design
     choice: only 1st truly wins), but only dead-last takes the full stake
     penalty — anyone strictly in the middle takes a smaller one."""
+    record_end_prices(conn, rnd["id"], price)
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
     summaries = {}

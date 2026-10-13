@@ -89,6 +89,8 @@ _COLUMN_ADDITIONS = [
     # replay clock {start_wall, speed, sim_start, sim_end} (ET) so the
     # dashboard can show a replayed day's own market time, not wall time
     ("rounds", "replay_anchor", "TEXT"),
+    # deadline price of every symbol traded, for exit-rule backtests
+    ("rounds", "end_prices", "TEXT"),
 ]
 
 
