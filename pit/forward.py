@@ -232,8 +232,6 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
             "opponent_return_pct": round(
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
-            "rival_held_tickers": _held_by_rivals(holdings_snapshot, aid),
-            "rival_recent_moves": _rival_recent_moves(conn, rnd["id"], aid),
             "rival_returns": {_name(conn, a): round(r, 2)
                               for a, r in returns.items() if a != aid},
         }
@@ -294,6 +292,12 @@ def _stop_pct_for(order: dict, default: float) -> float:
 MIN_ORDER_USD = 1.0
 
 
+def _fill(px: float, side: str) -> float:
+    """The price a fill actually gets: the quote plus/minus half the spread."""
+    b = DEFAULT.spread_bps / 10_000
+    return px * (1 + b) if side == "buy" else px * (1 - b)
+
+
 def _amount(o: dict) -> float | None:
     """Order size in account currency ("amount"; "amount_inr" is the old name)."""
     return o.get("amount") or o.get("amount_inr")
@@ -337,6 +341,7 @@ def _execute(conn, round_id, agent_id, st, orders, price, date,
         if not px or px <= 0:
             rejected.append(f"{o['side']} {o['ticker']}: no price available")
             continue
+        px = _fill(px, o["side"])
         if o["side"] == "buy":
             if _scale is None:      # first buy: cash now includes this decision's sells
                 wants = sum((_amount(b) or (b.get("qty", 0) * (price(b["ticker"]) or 0)))
@@ -425,6 +430,7 @@ def check_position_stops(conn, round_id, agent_id, st, price, date, config) -> i
             continue
         pct = stop_pcts.get(ticker, config.position_stop_loss_pct)
         if px <= entry * (1 - pct / 100.0):
+            px = _fill(px, "sell")
             cash += qty * px
             holdings.pop(ticker, None)
             cost_basis.pop(ticker, None)
@@ -485,6 +491,7 @@ def _liquidate(conn, round_id, agent_id, st, price, date, reason="stop-loss"):
     for t, qty in list(holdings.items()):
         px = price(t)
         if px:
+            px = _fill(px, "sell")
             cash += qty * px
             conn.execute(
                 """INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty,
@@ -738,6 +745,42 @@ def _agent_ts(ts):
     return agent_ts(ts)
 
 
+def sell_record(conn, round_id, agent_id, price) -> dict:
+    """A factual mirror of the agent's OWN sell decisions this round (not
+    advice): how many it made, how many were profitable, what they netted,
+    and what simply holding those shares would be worth at `price` now.
+    Arena-forced exits are excluded — the agent didn't choose them."""
+    rows = conn.execute(
+        "SELECT symbol, side, qty, price, reason FROM trades "
+        "WHERE round_id=? AND agent_id=? ORDER BY id", (round_id, agent_id)).fetchall()
+    held, cost = {}, {}
+    n = wins = 0
+    net = held_instead = paid = 0.0
+    b = DEFAULT.spread_bps / 10_000
+    for r in rows:
+        sym, q, px = r["symbol"], r["qty"], r["price"]
+        paid += q * px * b / (1 + b)
+        if r["side"] == "buy":
+            tot = held.get(sym, 0.0) + q
+            cost[sym] = (held.get(sym, 0.0) * cost.get(sym, px) + q * px) / tot
+            held[sym] = tot
+            continue
+        avg = cost.get(sym, px)
+        held[sym] = max(0.0, held.get(sym, 0.0) - q)
+        if is_forced(r["reason"]):
+            continue
+        pnl = (px - avg) * q
+        n += 1
+        wins += pnl > 0
+        net += pnl
+        now = price(sym)
+        held_instead += ((now - avg) * q) if now else pnl
+    return {"sells_you_chose": n, "profitable": wins,
+            "net_from_those_sells": round(net, 2),
+            "if_you_had_held_those_shares_instead": round(held_instead, 2),
+            "trading_costs_paid_so_far": round(paid, 2)}
+
+
 def _own_trades(conn, round_id, agent_id) -> list[dict]:
     """The agent's fills this round, each flagged forced_by_arena where the
     arena made it. Unflagged, the deadline close-out read like the agent's own
@@ -747,9 +790,22 @@ def _own_trades(conn, round_id, agent_id) -> list[dict]:
         "SELECT ts,symbol,side,qty,price,reason FROM trades "
         "WHERE round_id=? AND agent_id=? ORDER BY id", (round_id, agent_id))]
     from .replay import agent_ts
+    from . import market
+    end_px: dict = {}
     for r in rows:
         r["forced_by_arena"] = is_forced(r["reason"])
         r["ts"] = agent_ts(r["ts"])
+        # score each sell the agent CHOSE against simply holding to the end
+        if r["side"] == "sell" and not r["forced_by_arena"]:
+            if r["symbol"] not in end_px:
+                try:
+                    end_px[r["symbol"]] = (market.quote(r["symbol"]) or {}).get("price")
+                except Exception:
+                    end_px[r["symbol"]] = None
+            e = end_px[r["symbol"]]
+            if e and r["price"]:
+                r["price_at_round_end"] = round(e, 4)
+                r["holding_instead_vs_selling_pct"] = round((e / r["price"] - 1) * 100, 2)
     return rows
 
 
@@ -847,7 +903,10 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool,
                 "Be specific to these trades and this market, not generic advice. "
                 "Trades marked forced_by_arena were made by the arena (the "
                 "deadline close-out or a stop-loss), not by you — judge your "
-                "entries, sizing and your own sells, not those. "
+                "entries, sizing and your own sells, not those. Each of your "
+                "own sells shows the price at round end and "
+                "holding_instead_vs_selling_pct (positive = holding would have "
+                "done better than selling). "
                 "Self-critique only, don't reference other traders. <=400 chars. "
                 "Return JSON {\"notes\":\"...\"}.")
             prompt = {"your_own_trades": own_trades[:40],
@@ -919,8 +978,9 @@ def _recent_messages(conn, round_id, agent_id, limit=4,
         f"WHERE m.round_id=? AND m.agent_id IN ({placeholders}) "
         f"ORDER BY m.id DESC LIMIT ?",
         (round_id, *rival_ids, limit)).fetchall()
-    msgs = [f"{r['name']}: " + (_redact_tickers(r["message"]) if r["kind"] == "lesson"
-                                 else r["message"]) for r in reversed(rows)]
+    # stock names are hidden in every rival message — taunts ("watch META
+    # run") leaked picks just as lessons did, now that holdings are private
+    msgs = [f"{r['name']}: {_redact_tickers(r['message'])}" for r in reversed(rows)]
     if this_round_only:   # replay: lessons from earlier rounds may know how the day ends
         return msgs
     for lineage_id in rival_lineages:

@@ -43,9 +43,8 @@ This is a BATTLE. Your single objective is the highest return in the pool by \
 the deadline — generate maximum profit and beat your rivals. Losing agents are \
 retired and recreated from their own post-round self-critique; the winner keeps \
 going. Nobody hands you ideas and nobody is coming to help: your edge is your \
-own judgment. You can see what your rivals hold and what they have just bought \
-or sold, and how each of them is doing — whether you follow, fade or ignore \
-them is entirely your call.
+own judgment. You can see how each rival is doing (their live return) but not \
+what they hold or trade — your picks have to be your own.
 
 You have NO watchlist, NO tips, and NO pre-picked list from us. You have three \
 real research tools — use whichever combination you actually need, in any order, \
@@ -104,21 +103,20 @@ narrowly out of 1st. Play to win.
 """ if AGENT_AWARE else "") + """
 You can see your rivals' recent messages — some are trash talk, some (marked \
 \U0001f4dd) are a rival sharing a genuine lesson it drew from its own last \
-round. This is a rivalry — talk trash, defend your calls, mock their picks, \
-get in their heads. Keep it playful but competitive.
-
-`rival_held_tickers` in your context lists every ticker any rival currently \
-holds (symbols only — not their size, entry price, or reasoning). You may \
-trade ANY name, including one a rival holds — following, fading or ignoring \
-them is your call.
-
-`rival_recent_moves` lists the latest buys and sells your rivals made this \
-round (who, side, ticker, when — not price, size or reasoning).
+round. Stock names in rivals' messages are hidden ("[a stock]"): you get their \
+attitude and their lessons, not their picks. This is a rivalry — talk trash, \
+defend your calls, get in their heads. Keep it playful but competitive.
 
 `orders_not_executed_last_tick` lists any of your orders that were rejected \
 last decision and why (e.g. no cash left). If `your_cash` is near zero you \
 CANNOT buy — sell something first to free cash, and don't resubmit the same \
 unaffordable order.
+
+Every fill pays half the bid/ask spread (buys a little above the quote, \
+sells a little below), as with a real broker. `your_sell_record_this_round` \
+is a plain record of the sells YOU chose this round: how many, how many were \
+profitable, what they netted, what holding those shares instead would be \
+worth now, and the trading costs you've paid.
 
 `arena_sold_for_you_this_round` lists positions the arena sold for you \
 (a stop-loss that fired while you slept) — when, which ticker, at what price.
@@ -263,10 +261,9 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "rival_return_pct": view.get("opponent_return_pct"),
         "rival_returns": view.get("rival_returns", {}),
         "rival_recent_messages": view.get("rival_messages", []),
-        "rival_held_tickers": view.get("rival_held_tickers", []),
-        "rival_recent_moves": view.get("rival_recent_moves", []),
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
         "arena_sold_for_you_this_round": view.get("arena_sold_for_you_this_round", []),
+        "your_sell_record_this_round": view.get("your_sell_record_this_round"),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
         "arena_risk": view.get("risk"),

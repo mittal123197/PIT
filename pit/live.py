@@ -490,14 +490,13 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             "opponent_return_pct": round(
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
-            "rival_held_tickers": forward._held_by_rivals(holdings_snapshot, aid),
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid,
                                                        this_round_only=bool(replay._STATE)),
-            "rival_recent_moves": forward._rival_recent_moves(conn, rnd["id"], aid),
             "rival_returns": {forward._name(conn, a): round(r, 2)
                               for a, r in returns.items() if a != aid},
             "orders_not_executed_last_tick": _LAST_REJECTIONS.get(aid, []),
             "arena_sold_for_you_this_round": _forced_exits(conn, rnd["id"], aid),
+            "your_sell_record_this_round": forward.sell_record(conn, rnd["id"], aid, price),
         }
         jobs.append({"aid": aid, "st": st, "name": name, "cfg": cfg, "view": view})
 

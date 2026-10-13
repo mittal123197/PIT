@@ -184,6 +184,12 @@ class ArenaConfig:
 
     # --- execution ---
     per_order_fee: float = _env_float("PIT_PER_ORDER_FEE", 0.0)  # Dhan: ₹0 delivery
+    # Half the bid/ask spread, in basis points, paid on every fill: buys fill
+    # this much ABOVE the quote, sells this much BELOW. Without it churning was
+    # free here, which flattered the agents' worst habit (yesterday: 31
+    # agent-chosen sells, 26% profitable, net loss). 3 bps is realistic for
+    # the 100 largest US names; crypto alts are wider. Marks stay at the quote.
+    spread_bps: float = _env_float("PIT_SPREAD_BPS", 3.0)
     allow_short: bool = False  # Phase 1: long-only paper trading
 
     # Two returns within this many percentage points count as a tie, sending

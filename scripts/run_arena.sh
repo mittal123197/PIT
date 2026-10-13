@@ -17,7 +17,7 @@ MODE="replay"          # replay | live
 BATTLES=3
 COMPRESS=9             # replay: compress one real trading day into this many minutes
 REPLAY_DATE=""         # replay: which real day (default: pit.cli's own "last trading day")
-MINUTES=15             # live: session length in minutes
+MINUTES=120            # live: session length in minutes (30-min rounds were mostly noise)
 INTERVAL=300           # live: seconds between agent decisions
 INTERVAL_SET=0        # 1 if --interval was given explicitly
 REFRESH=5              # seconds between cheap mark-to-market refreshes
@@ -36,7 +36,7 @@ Usage: scripts/run_arena.sh [options]
   --compress N                 Replay: compress one real day into N minutes (default: 9)
   --date YYYY-MM-DD           Replay: which real trading day to replay
                                (default: pit.cli's own "most recent weekday")
-  --minutes N                 Live: session length in minutes (default: 15)
+  --minutes N                 Live: session length in minutes (default: 120)
   --interval N                 Live: seconds between agent decisions (default: 300)
   --refresh N                 Seconds between cheap price refreshes (default: 5)
   --no-debug                  Disable the full audit trail (default: on)

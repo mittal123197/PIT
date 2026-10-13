@@ -1,5 +1,5 @@
-"""Agents see which tickers rivals hold (symbols only, snapshot from the
-start of the decision cycle) and may buy them anyway — the old "no buying
+"""Agents see rivals' returns only — not their holdings or trades — and
+may buy any name — the old "no buying
 what a rival holds" block was removed: first mover took the obvious names and
 pushed everyone else into thin ones, which is a bias, not a choice."""
 import os
@@ -60,7 +60,7 @@ def test_tick_allows_a_buy_on_a_ticker_a_rival_already_holds(monkeypatch):
         # RONIN and VIPER can share the same model (both default to the cheap
         # DeepSeek tier), so model identity alone can't distinguish agents
         if not view["positions"]:
-            assert "AAA" in view["rival_held_tickers"]
+            assert "rival_held_tickers" not in view   # rivals' holdings are private
             return ([{"ticker": "AAA", "side": "buy", "qty": 5, "reason": "t"}], "", "", [])
         return ([], "", "", [])
 
@@ -106,7 +106,7 @@ def test_snapshot_is_taken_before_this_ticks_own_trades_avoiding_order_bias(monk
     rid = forward.start_round(conn, config, days=7)
 
     def fake_decide(view, tick, total_days, goal_pct, guidelines, model=None):
-        assert view["rival_held_tickers"] == []  # nobody held anything at tick start
+        assert "rival_held_tickers" not in view and "rival_recent_moves" not in view
         return ([{"ticker": "SHARED", "side": "buy", "qty": 1, "reason": "t"}], "", "", [])
 
     monkeypatch.setattr(live.autonomous, "decide", fake_decide)
