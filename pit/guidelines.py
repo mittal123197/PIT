@@ -651,6 +651,7 @@ def backtest(spec: dict, practice: str, outcomes: list[dict]) -> dict:
         elif hit is False:
             o.append(r["ret"])
     ev = {"n_match": len(m), "n_other": len(o),
+          "unit": "sells" if spec.get("action") == "sell" else "buys",
           "avg_match": round(stx.mean(m), 3) if m else None,
           "avg_other": round(stx.mean(o), 3) if o else None,
           "win_rate_match": round(sum(x > 0 for x in m) / len(m) * 100) if m else None}
@@ -706,10 +707,11 @@ def evidence_label(ev: dict | None) -> str:
     if not ev:
         return "unverifiable (legacy free-text rule)"
     if ev["verdict"] == "untested":
-        return (f"untested — {ev['n_match']} matching / {ev['n_other']} other buys "
+        return (f"untested — {ev['n_match']} matching / {ev['n_other']} other {ev.get('unit', 'buys')} "
                 f"across {ev.get('rounds', '?')} round(s); need {_min_trades()} each "
                 f"from at least {_min_rounds()} rounds")
-    return (f"{ev['verdict']} — {ev['n_match']} matching buys avg {ev['avg_match']:+.2f}% "
+    u = ev.get("unit", "buys")
+    return (f"{ev['verdict']} — {ev['n_match']} matching {u} avg {ev['avg_match']:+.2f}% "
             f"(win {ev['win_rate_match']}%) vs {ev['n_other']} others avg "
             f"{ev['avg_other']:+.2f}%, t={ev['t']:+.2f}")
 
@@ -930,7 +932,7 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
         # at all, and an AVOID rule adopted now could never be tested later
         # (agents obeying it never produce a matching buy). Not adoptable.
         if p["kind"] == "add" and ledger and ledger["n_match"] < _min_probation():
-            r["note"] = (f"vetoed: no evidence — {ledger['n_match']} logged buys match "
+            r["note"] = (f"vetoed: no evidence — {ledger['n_match']} logged {ledger.get('unit', 'buys')} match "
                          f"this condition (need {_min_probation()})")
             continue
         texts = active_texts(conn)
