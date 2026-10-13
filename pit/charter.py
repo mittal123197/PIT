@@ -78,8 +78,11 @@ def revise_charter(model: str | None, charter: str, own_trades: list, return_pct
 
 
 def ensure_charters(conn, arena: str, verbose: bool = True) -> None:
-    """At round start: any current agent without a charter writes one (in
-    parallel, each with its own model)."""
+    """At round start: any current agent without a charter writes one, each
+    with its own model. PIT_CHARTERS=0 turns this off (tests: no network)."""
+    import os
+    if os.getenv("PIT_CHARTERS", "1") == "0":
+        return
     rows = conn.execute("""SELECT l.name, a.id, a.strategy_config FROM lineages l
                            JOIN agents a ON a.id = l.current_agent_id ORDER BY l.id""").fetchall()
     cfgs = {r["name"]: (r["id"], json.loads(r["strategy_config"] or "{}")) for r in rows}
