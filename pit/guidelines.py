@@ -727,7 +727,8 @@ def review_rules(conn) -> list[dict]:
         spec = json.loads(g["spec"])
         ev = backtest(spec, g["practice"], outcomes_for(conn, spec, cache))
         conn.execute("UPDATE guidelines SET evidence=? WHERE id=?", (json.dumps(ev), g["id"]))
-        if ev["verdict"] == "inconclusive" and g.get("tier") != "proven":
+        if ev["verdict"] == "inconclusive" and g.get("tier") != "proven" \
+                and (ev.get("t") or 0) < _T_CONTRA:
             # a probation rule that now has enough trades and still shows no edge
             conn.execute("UPDATE guidelines SET status='retired', retired_at=?, "
                          "retired_reason=? WHERE id=?",
@@ -921,7 +922,10 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
             continue
         # Enough trades on both sides and still no edge: the data has spoken
         # — probation is for rules we can't judge yet, not ones that don't work
-        if p["kind"] == "add" and verdict == "inconclusive":
+        # t < 1: the data shows essentially no edge -> veto. 1 <= t < 2: a
+        # promising lean on a small sample (e.g. 14 vs 9 buys, t=+1.13) —
+        # it may go to the stricter probation vote instead of dying here.
+        if p["kind"] == "add" and verdict == "inconclusive" and (ledger.get("t") or 0) < _T_CONTRA:
             r["note"] = "vetoed: no edge in the data — " + evidence_label(ledger)
             continue
         dup = _duplicate_of(p, active_guidelines(conn), outcomes) if p["kind"] == "add" else None

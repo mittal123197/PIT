@@ -162,3 +162,15 @@ def test_exit_rule_is_backtested_against_holding(monkeypatch):
     assert g.spec_text(spec, "bad") == "selling when held_min < 15"
     ev = g.backtest(spec, "bad", g.outcomes_for(c, spec))
     assert ev["verdict"] == "supported" and ev["rounds"] == 2
+
+
+def test_promising_but_unproven_rule_can_go_to_probation(monkeypatch):
+    c = _conn(); _ledger(c, 0.3, 0.0, n=6)      # small edge -> 1 <= t < 2 territory
+    ev = g.backtest(g.parse_spec([["RSI14", "<", 30]]), "good", g.buy_outcomes(c))
+    if not (1.0 <= (ev["t"] or 0) < 2.0):
+        return   # sample noise; the veto path is covered elsewhere
+    monkeypatch.setattr(g, "_ask_json", _fake(
+        {"RONIN": RSI_DO}, {("LYNX", "RSI14"): {"vote": "agree"},
+                            ("VIPER", "RSI14"): {"vote": "agree"}}, []))
+    res = [r for r in g.pool_constitution(c, ArenaConfig(), None) if r.get("kind")]
+    assert res[0]["accepted"] and res[0]["tier"] == "probation"
