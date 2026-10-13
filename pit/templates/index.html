@@ -124,7 +124,7 @@
     <thead><tr>
       <th>#</th><th>Agent</th><th>ELO</th><th class="hide-sm">Trend</th>
       <th class="hide-sm">Record</th><th class="hide-sm">Podium</th>
-      <th>Avg / round</th><th class="hide-sm">Best round</th><th class="hide-sm">Gen</th>
+      <th>Avg / round</th><th title="average return above simply holding the market (SPY) over the same window — and how many rounds it beat the market">vs market</th><th class="hide-sm">Best round</th><th class="hide-sm">Gen</th>
       {% if stake_evolution %}<th>Stake</th>{% endif %}
     </tr></thead>
     <tbody>
@@ -148,6 +148,7 @@
           <span style="color:var(--gold);">1st×{{ r.podium.get(1, 0) }}</span>
           <span class="muted">· 2nd×{{ r.podium.get(2, 0) }} · 3rd×{{ r.podium.get(3, 0) }}</span></td>
         <td class="mono {{ 'up' if (r.avg_return or 0) > -0.005 else 'down' }}">{{ r.avg_return|pct }}</td>
+        <td class="mono" style="white-space:nowrap;">{% if r.alpha is not none %}<span class="{{ 'up' if r.alpha > -0.005 else 'down' }}">{{ r.alpha|pct }}</span> <span class="muted" style="font-size:11px;">{{ r.beat_mkt }}/{{ r.mkt_rounds }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="hide-sm mono {{ 'up' if (r.best_return or 0) > -0.005 else 'down' }}">{{ r.best_return|pct }}</td>
         <td class="hide-sm mono">{{ r.generation }}</td>
         {% if stake_evolution %}<td class="mono">{{ r.current_stake|money }}</td>{% endif %}
@@ -240,7 +241,7 @@
   <table>
     <thead><tr>
       <th>Round</th><th class="hide-sm">Market</th><th class="hide-sm">Length</th>
-      <th>Winner</th><th>Return</th><th class="hide-sm">Field</th>
+      <th>Winner</th><th>Return</th><th class="hide-sm" title="just holding the market over the same window">Market</th><th class="hide-sm">Field</th>
     </tr></thead>
     <tbody>
     {% for r in rounds %}
@@ -255,11 +256,12 @@
             <span class="agentname">{{ w.lineage }}</span>
           </td>
           <td class="mono {{ 'up' if w.return_pct > -0.005 else 'down' }}">{{ w.return_pct|pct }}</td>
+          <td class="hide-sm mono muted">{{ r.bench_pct|pct if r.bench_pct is not none else '—' }}</td>
           <td class="hide-sm mono" style="font-size:12px;white-space:nowrap;">
             {% for p in r.rankings[1:] %}<span class="muted">{{ p.lineage }}</span>
               <span class="{{ 'up' if p.return_pct > -0.005 else 'down' }}">{{ p.return_pct|pct }}</span>{% if not loop.last %} · {% endif %}{% endfor %}</td>
         {% else %}
-          <td colspan="3"><span class="pill status">running</span></td>
+          <td colspan="4"><span class="pill status">running</span></td>
         {% endif %}
       </tr>
     {% else %}

@@ -30,6 +30,7 @@ def leaderboard(conn: sqlite3.Connection) -> list[dict]:
         st = stats.get(r["id"], {"played": 0, "podium": {}, "avg": None, "best": None})
         r["played"], r["podium"] = st["played"], st["podium"]
         r["avg_return"], r["best_return"] = st["avg"], st["best"]
+        r["alpha"], r["beat_mkt"], r["mkt_rounds"] = st.get("alpha"), st.get("beat_mkt"), st.get("mkt_rounds")
     return rows
 
 
@@ -49,19 +50,38 @@ def rating_timeline(conn: sqlite3.Connection, lineage_id: int) -> list[float]:
     return timeline
 
 
+def round_benchmark_pct(conn, round_id: int) -> float | None:
+    """What buying the benchmark (SPY / BTC) at the round's start and holding
+    it to the end returned — the 'just hold the market' yardstick."""
+    rows = conn.execute("SELECT price FROM benchmark_marks WHERE round_id=? ORDER BY id",
+                        (round_id,)).fetchall()
+    if len(rows) < 2 or not rows[0]["price"]:
+        return None
+    return round((rows[-1]["price"] / rows[0]["price"] - 1) * 100, 3)
+
+
 def lineage_stats(conn: sqlite3.Connection) -> dict[int, dict]:
-    """Per lineage: rounds played, podium finishes, average / best round return."""
+    """Per lineage: rounds played, podium finishes, average / best round
+    return, and average return above just holding the market (alpha)."""
     out: dict[int, dict] = {}
+    bench: dict[int, float | None] = {}
     for r in conn.execute(
-            """SELECT a.lineage_id, rr.rank, rr.return_pct FROM round_rankings rr
+            """SELECT a.lineage_id, rr.round_id, rr.rank, rr.return_pct FROM round_rankings rr
                JOIN agents a ON a.id = rr.agent_id""").fetchall():
-        d = out.setdefault(r["lineage_id"], {"played": 0, "podium": {}, "rets": []})
+        d = out.setdefault(r["lineage_id"], {"played": 0, "podium": {}, "rets": [], "alphas": []})
         d["played"] += 1
         d["podium"][r["rank"]] = d["podium"].get(r["rank"], 0) + 1
         d["rets"].append(r["return_pct"] or 0.0)
+        if r["round_id"] not in bench:
+            bench[r["round_id"]] = round_benchmark_pct(conn, r["round_id"])
+        if bench[r["round_id"]] is not None:
+            d["alphas"].append((r["return_pct"] or 0.0) - bench[r["round_id"]])
     for d in out.values():
         d["avg"] = round(sum(d["rets"]) / len(d["rets"]), 2) if d["rets"] else None
         d["best"] = round(max(d["rets"]), 2) if d["rets"] else None
+        d["alpha"] = round(sum(d["alphas"]) / len(d["alphas"]), 2) if d["alphas"] else None
+        d["beat_mkt"] = sum(a > 0 for a in d["alphas"])
+        d["mkt_rounds"] = len(d["alphas"])
     return out
 
 
@@ -112,6 +132,7 @@ def recent_rounds(conn: sqlite3.Connection, limit: int = 25) -> list[dict]:
         by_round.setdefault(row["round_id"], []).append(row)
     for r in rounds:
         r["rankings"] = by_round.get(r["id"], [])
+        r["bench_pct"] = round_benchmark_pct(conn, r["id"])
         r["duration"] = (_fmt_duration(r["created_at"], r["resolved_at"])
                          if r.get("resolved_at") else None)
     return rounds
