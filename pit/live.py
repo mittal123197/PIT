@@ -135,6 +135,15 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
     _set_risk_bands(conn, config, rnd, minutes, verbose)
     if replay._STATE:
         _clear_memory_for_replay(conn, rnd, verbose)
+    from . import charter as charter_mod
+    charter_mod.ensure_charters(conn, (
+        f"{_market_label()} · {minutes}-minute round · decisions every {interval // 60} min · "
+        "long-only paper trading, $1,000 each, every fill pays half the spread, "
+        "positions force-closed at the deadline · rivals' returns are visible, "
+        "not their holdings · every few minutes you see ONE data table of ~100 names "
+        "with exactly these columns (write your charter in terms of them — nothing "
+        "else is available): " + brief_mod._HEADER.replace("|", ", ")
+        + " · plus a line with SPY/QQQ since the open and market breadth"), verbose)
     end = time.time() + minutes * 60
     conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=? WHERE id=?",
                  (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"),
@@ -492,6 +501,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             "opponent_return_pct": round(
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
+            "charter": cfg.get("charter", ""),
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid,
                                                        this_round_only=bool(replay._STATE)),
             "rival_returns": {forward._name(conn, a): round(r, 2)

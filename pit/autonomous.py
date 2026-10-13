@@ -118,6 +118,10 @@ is a plain record of the sells YOU chose this round: how many, how many were \
 profitable, what they netted, what holding those shares instead would be \
 worth now, and the trading costs you've paid.
 
+`your_charter` is the trading style YOU chose for yourself — trade by it. If \
+you deliberately break it on a decision, say why in your thoughts. You can \
+change it after the round, not mid-round.
+
 `arena_sold_for_you_this_round` lists positions the arena sold for you \
 (a stop-loss that fired while you slept) — when, which ticker, at what price.
 
@@ -151,11 +155,17 @@ priced above your cash by sizing the amount to what you can afford."""
 _BRIEF_TOOLS = """You have NO research tools to call and no web to browse. Instead, every \
 time you wake up you receive ONE complete data table covering your whole \
 tradeable universe (below the instructions, as MARKET BRIEF): for every name \
-its sector, price, recent returns (1d/5d/20d), trend (price vs its 20- and \
+its sector, price, TODAY's session so far (open% = change since today's open, \
+vsVWAP% = price vs today's volume-weighted average price, 15m%/30m% = change \
+over the last 15/30 minutes, dayRange% = where the price sits in today's \
+high-low range, 0 = at the low, 100 = at the high, volPace = today's volume \
+vs a normal day at this hour), then the daily view: recent returns \
+(1d/5d/20d), trend (price vs its 20- and \
 50-day moving average), RSI14, position in its 52-week range, today's volume \
 vs normal, and fundamentals — forward P/E, profit margin, revenue growth, \
 earnings growth, ROE, debt/equity, analyst rating and the analyst target's \
-upside. A "." means not available. Rows are in RANDOM order — position in \
+upside. A MARKET NOW line above the table gives SPY/QQQ since the open and how many \
+names are up vs down today. A "." means not available. Rows are in RANDOM order — position in \
 the table means nothing. Everyone in the pool sees the same data. You are \
 free to trade ANY ticker in it, chosen on your own thesis. You make ONE \
 decision per wake-up, then sleep until the next one (several minutes).
@@ -264,6 +274,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
         "arena_sold_for_you_this_round": view.get("arena_sold_for_you_this_round", []),
         "your_sell_record_this_round": view.get("your_sell_record_this_round"),
+        "your_charter": view.get("charter", ""),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
         "arena_risk": view.get("risk"),
@@ -276,7 +287,8 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
             {"role": "user", "content": json.dumps(context)},
             {"role": "user", "content": f"MARKET BRIEF as of {brief['asof']} "
                                         f"({brief['n']} names, random order):\n"
-                                        f"{_shuffled(brief['text'])}"},
+                                        + (f"{brief['market']}\n" if brief.get("market") else "")
+                                        + f"{_shuffled(brief['text'])}"},
         ]
     else:
         max_turns = MAX_RESEARCH_TURNS

@@ -113,6 +113,9 @@
         <span class="muted">→</span> <span title="account value now: cash + stocks at the latest price">worth <b style="color:var(--ink);">{{ a.value|money2 }}</b></span>
         <span class="muted">·</span> <span title="{{ 'every position was sold at the deadline, so the whole account is cash' if not data.is_live else 'uninvested cash' }}">cash {{ a.current_capital|money2 }}</span>
         <span class="muted">·</span> {{ a.trade_count }} trades</div>
+      {% if a.charter %}<div title="this agent's own trading charter — the style it chose for itself; it may revise it after each round"
+        style="margin-top:8px;font-size:11.5px;line-height:1.45;color:var(--ink-soft);border-left:2px solid {{ col }};padding-left:8px;">
+        <span class="mono" style="font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);">charter</span><br>{{ a.charter }}</div>{% endif %}
       <div class="kpis">
         <div title="share of the account in stocks right now (the rest is cash)">
           <span class="kl">invested</span><b>{{ a.exposure_pct }}%</b>

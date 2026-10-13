@@ -304,7 +304,8 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
         """SELECT rs.agent_id, rs.starting_capital, rs.current_capital, rs.holdings,
                   rs.final_return_pct, rs.status, rs.trade_count,
                   l.name, l.id AS lineage_id,
-                  json_extract(a.strategy_config, '$.model') AS model
+                  json_extract(a.strategy_config, '$.model') AS model,
+                  json_extract(a.strategy_config, '$.charter') AS charter
            FROM round_states rs JOIN agents a ON a.id = rs.agent_id
            JOIN lineages l ON l.id = a.lineage_id WHERE rs.round_id=?""",
         (r["id"],)))

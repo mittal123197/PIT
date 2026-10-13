@@ -50,3 +50,10 @@ def test_rival_lessons_pass_on_the_principle_not_the_ticker(monkeypatch):
     out = forward._redact_tickers("CRM/META were green; keep RSI<65, skip XOM.")
     assert "META" not in out and "CRM" not in out and "XOM" not in out
     assert "RSI<65" in out
+
+
+def test_moving_average_ma_is_not_redacted_as_mastercard(monkeypatch):
+    from pit import forward, guidelines
+    monkeypatch.setattr(guidelines, "_universe_symbols", lambda: {"MA", "META"})
+    out = forward._redact_tickers("above its 20-day MA and 50d MA; bought MA and META")
+    assert out == "above its 20-day MA and 50d MA; bought [a stock] and [a stock]"

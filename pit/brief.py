@@ -106,6 +106,7 @@ def _technicals(close, volume) -> dict | None:
     try:
         vol = volume.dropna()
         out["volx"] = round(float(vol.iloc[-1]) / float(vol.iloc[-21:-1].mean()), 2)
+        out["avgvol"] = float(vol.iloc[-21:-1].mean())
     except Exception:
         out["volx"] = None
     return out
@@ -145,9 +146,63 @@ def daily_vols(symbols: list[str], end_day) -> dict[str, float]:
     return out
 
 
+# ---- intraday (today's 5-minute bars) -------------------------------------
+#
+# Every other column is built from DAILY bars, but rounds last an hour or two:
+# agents were judging a 60-minute race with week-scale tools (they all bought
+# "+3% today, at 52-week highs" names that then faded). These columns describe
+# TODAY's session so far. Information only — no rule about how to use it.
+
+def _download_intraday(symbols: list[str]):
+    import yfinance as yf
+    frames = []
+    for i in range(0, len(symbols), 50):
+        df = yf.download(symbols[i:i + 50], period="1d", interval="5m", progress=False,
+                         auto_adjust=True, timeout=30, threads=False)
+        if df is not None and not df.empty:
+            frames.append(df)
+    return frames
+
+
+def _intraday(close, high, low, volume, avg_daily_vol, minutes_open: float) -> dict:
+    close = close.dropna()
+    if len(close) < 2:
+        return {}
+    px, op = float(close.iloc[-1]), float(close.iloc[0])
+    out = {"o": _pct(px, op)}
+    vol = volume.reindex(close.index).fillna(0)
+    tp = (high.reindex(close.index) + low.reindex(close.index) + close) / 3
+    if float(vol.sum()) > 0:
+        out["vwap"] = _pct(px, float((tp * vol).sum() / vol.sum()))
+    out["m15"] = _pct(px, float(close.iloc[-4])) if len(close) >= 4 else None
+    out["m30"] = _pct(px, float(close.iloc[-7])) if len(close) >= 7 else None
+    hi, lo = float(high.reindex(close.index).max()), float(low.reindex(close.index).min())
+    out["rng"] = round((px - lo) / (hi - lo) * 100) if hi > lo else None
+    if avg_daily_vol and minutes_open > 0:
+        expected = avg_daily_vol * min(1.0, minutes_open / 390)
+        out["pace"] = round(float(vol.sum()) / expected, 2) if expected else None
+    return out
+
+
+def _market_line(intra: dict, mode: str) -> str:
+    """SPY / QQQ today plus breadth — is the whole tape weak, or just my stock?"""
+    parts = []
+    for ix in (("BTC-USD",) if mode == "crypto" else ("SPY", "QQQ")):
+        d = intra.get(ix)
+        if d and d.get("o") is not None:
+            parts.append(f"{ix} {d['o']:+.2f}% since open"
+                         + (f", {d['vwap']:+.2f}% vs VWAP" if d.get("vwap") is not None else ""))
+    ups = sum(1 for k, d in intra.items() if k not in ("SPY", "QQQ") and (d.get("o") or 0) > 0)
+    downs = sum(1 for k, d in intra.items() if k not in ("SPY", "QQQ") and (d.get("o") or 0) < 0)
+    if ups + downs:
+        parts.append(f"breadth: {ups} up / {downs} down since open")
+    return "MARKET NOW: " + "; ".join(parts) if parts else ""
+
+
 # ---- the table -----------------------------------------------------------
 
-_HEADER = ("TICKER|sector|price|1d%|5d%|20d%|vs20dMA%|vs50dMA%|RSI14|52wk-pos%|"
+_HEADER = ("TICKER|sector|price|open%|vsVWAP%|15m%|30m%|dayRange%|volPace|"
+           "1d%|5d%|20d%|vs20dMA%|vs50dMA%|RSI14|52wk-pos%|"
            "vol-x|dayVol%|autoStop%|fwdPE|margin%|revGr%|epsGr%|ROE%|D/E|analyst|tgt-upside%")
 
 # the data-table columns an agent-written rule may test, -> technicals key.
@@ -155,7 +210,10 @@ _HEADER = ("TICKER|sector|price|1d%|5d%|20d%|vs20dMA%|vs50dMA%|RSI14|52wk-pos%|"
 # exact numbers the agent saw when it traded.
 RULE_FIELDS = {"1d%": "d1", "5d%": "d5", "20d%": "d20", "vs20dMA%": "v20",
                "vs50dMA%": "v50", "RSI14": "rsi", "52wk-pos%": "p52",
-               "vol-x": "volx", "dayVol%": "dvol"}
+               "vol-x": "volx", "dayVol%": "dvol",
+               # today's session (intraday)
+               "open%": "o", "vsVWAP%": "vwap", "15m%": "m15", "30m%": "m30",
+               "dayRange%": "rng", "volPace": "pace"}
 
 
 def _f(v, nd=1):
@@ -171,7 +229,10 @@ def _row(sym: str, sector: str, t: dict, f: dict | None) -> str:
     px = t["px"]
     price = f"{px:,.2f}" if px >= 1 else f"{px:.6g}"
     return "|".join([
-        sym, (sector or ".")[:11], price, _f(t["d1"], 2), _f(t["d5"]), _f(t["d20"]),
+        sym, (sector or ".")[:11], price,
+        _f(t.get("o"), 2), _f(t.get("vwap"), 2), _f(t.get("m15"), 2), _f(t.get("m30"), 2),
+        _f(t.get("rng"), 0), _f(t.get("pace"), 2),
+        _f(t["d1"], 2), _f(t["d5"]), _f(t["d20"]),
         _f(t["v20"]), _f(t["v50"]), _f(t["rsi"]), _f(t["p52"], 0), _f(t["volx"], 2),
         _f(t.get("dvol"), 2),
         _f(risk.auto_stop(sym, 0.0) or None, 2) if risk.active() else ".",
@@ -195,7 +256,8 @@ def get_brief(mode: str, max_age: float = 60.0) -> dict | None:
     v = _BRIEF["value"]
     rows = [_row(s, sec, t, f) for s, sec, t, f in v["rows"]]
     return {"text": _HEADER + "\n" + "\n".join(rows), "prices": v["prices"],
-            "features": v["features"], "n": len(rows), "asof": v["asof"]}
+            "features": v["features"], "n": len(rows), "asof": v["asof"],
+            "market": v.get("market", "")}
 
 
 def _build(mode: str) -> dict | None:
@@ -216,5 +278,35 @@ def _build(mode: str) -> dict | None:
             rows.append((s, sectors.get(s, ""), t, (fund.get(s) or {}).get("f")))
     if not rows:
         return None
+    intra = _intraday_all(mode, symbols, {r[0]: r[2].get("avgvol") for r in rows})
+    for sym, sec, t, f in rows:
+        t.update({k: v for k, v in intra.get(sym, {}).items()})
+        features[sym] = {k: t.get(k) for k in RULE_FIELDS.values()}
     return {"rows": rows, "prices": prices, "features": features,
+            "market": _market_line(intra, mode),
             "asof": time.strftime("%Y-%m-%d %H:%M:%S")}
+
+
+def _intraday_all(mode: str, symbols: list[str], avgvol: dict) -> dict:
+    """{symbol: intraday metrics} for the universe plus the index ETFs."""
+    extra = ["BTC-USD"] if mode == "crypto" else ["SPY", "QQQ"]
+    want = list(dict.fromkeys(symbols + extra))
+    try:
+        frames = _download_intraday(want)
+    except Exception:
+        return {}
+    out: dict = {}
+    for df in frames:
+        try:
+            first = df.index[0]
+            minutes_open = (df.index[-1] - first).total_seconds() / 60 + 5
+            for s_ in want:
+                if s_ in out or s_ not in df["Close"].columns:
+                    continue
+                m = _intraday(df["Close"][s_], df["High"][s_], df["Low"][s_],
+                              df["Volume"][s_], avgvol.get(s_), minutes_open)
+                if m:
+                    out[s_] = m
+        except Exception:
+            continue
+    return out

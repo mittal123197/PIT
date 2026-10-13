@@ -863,6 +863,10 @@ def _reflect_winner(conn, round_id, wa, return_pct) -> str:
     note = _self_reflection(cfg.get("notes", ""), trades, return_pct, won=True,
                            model=cfg.get("model"))
     cfg["notes"] = note
+    if cfg.get("charter"):
+        from .charter import revise_charter
+        n = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=?", (round_id,)).fetchone()[0]
+        cfg["charter"] = revise_charter(cfg.get("model"), cfg["charter"], trades, return_pct, 1, n)
     conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                  (json.dumps(cfg), wa["id"]))
     _share_lesson(conn, round_id, wa["id"], note)
@@ -883,6 +887,14 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
     # (Groq) for every agent that had ever lost even once, regardless of
     # which model it was actually supposed to run.
     new_cfg = {"mode": "autonomous", "notes": note, "model": old_cfg.get("model")}
+    if old_cfg.get("charter"):
+        from .charter import revise_charter
+        # rankings are written after reflection — rank from the round's returns
+        n = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=?", (round_id,)).fetchone()[0]
+        better = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=? "
+                              "AND final_return_pct > ?", (round_id, return_pct)).fetchone()[0]
+        new_cfg["charter"] = revise_charter(old_cfg.get("model"), old_cfg["charter"], trades,
+                                            return_pct, min(n, better + 1), n)
     new_id = conn.execute(
         """INSERT INTO agents (lineage_id, generation, strategy_config,
            activity_profile, rating, seeded_from_trade_agent_id, mutation_note,
@@ -1054,8 +1066,15 @@ def _redact_tickers(text: str) -> str:
         syms = set()
     if not syms:
         return text
-    return re.sub(r"\b[A-Z][A-Z0-9.\-]{0,9}\b",
-                  lambda m: "[a stock]" if m.group(0) in syms else m.group(0), text)
+    def _sub(m):
+        tok = m.group(0)
+        if tok not in syms:
+            return tok
+        # "20-day MA", "50d MA": a moving average, not Mastercard
+        if tok == "MA" and re.search(r"\d+\s*-?\s*(d|day)s?\s*$", text[max(0, m.start() - 10):m.start()]):
+            return tok
+        return "[a stock]"
+    return re.sub(r"\b[A-Z][A-Z0-9.\-]{0,9}\b", _sub, text)
 
 
 def _name(conn, agent_id) -> str:
