@@ -118,9 +118,13 @@ is a plain record of the sells YOU chose this round: how many, how many were \
 profitable, what they netted, what holding those shares instead would be \
 worth now, and the trading costs you've paid.
 
-`your_charter` is the trading style YOU chose for yourself — trade by it. If \
-you deliberately break it on a decision, say why in your thoughts. You can \
-change it after the round, not mid-round.
+`your_charter` is the trading style YOU chose for yourself — trade by it. \
+When no name meets your charter, holding cash IS following it; that is a \
+legitimate decision, not a failure. Every buy must carry "charter_fit": the \
+charter conditions it meets, citing the table's numbers — or "deviation: <why>" \
+if you knowingly break it. Deviations are marked in the public trade log and \
+in your own post-round review. You can change the charter after the round, \
+not mid-round.
 
 `arena_sold_for_you_this_round` lists positions the arena sold for you \
 (a stop-loss that fired while you slept) — when, which ticker, at what price.
@@ -139,7 +143,7 @@ Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
   "research": { "scan": true, "history": ["TICKER", ...], "fundamentals": ["TICKER", ...] },
-  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"reason":"..."} ],
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"charter_fit":"...","reason":"..."} ],
   "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
   "done": true|false,
   "notes": "carry-forward notes to your future self"
@@ -175,7 +179,7 @@ decision per wake-up, then sleep until the next one (several minutes).
 _BRIEF_FORMAT = """Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
-  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"reason":"..."} ],
+  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"charter_fit":"...","reason":"..."} ],
   "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
   "done": true,
   "notes": "carry-forward notes to your future self"
@@ -385,8 +389,15 @@ def _clean_orders(orders: list) -> list[dict]:
             side = str(o["side"]).lower()
             if side not in ("buy", "sell"):
                 continue
+            reason = str(o.get("reason", ""))[:160]
+            fit = str(o.get("charter_fit", "")).strip()
+            if side == "buy" and fit.lower().startswith("deviation"):
+                reason = ("⚠ off-charter: " + fit[len("deviation"):].lstrip(" :—-")[:80]
+                          + " | " + reason)[:200]
+            elif side == "buy" and not fit:
+                reason = ("⚠ no charter fit given | " + reason)[:200]
             entry = {"ticker": str(o["ticker"]).upper().strip(), "side": side,
-                     "reason": str(o.get("reason", ""))[:160]}
+                     "reason": reason}
             amt = o.get("amount") or o.get("amount_inr")   # old name still accepted
             if amt:
                 entry["amount"] = float(amt)
