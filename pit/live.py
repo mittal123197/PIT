@@ -560,9 +560,12 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
         if message:
             # local wall-clock ts (matches trades/fills), not forward._now()'s
             # UTC ISO — see _persist_audit for why mixing the two is a bug.
+            # Stock names are redacted when STORED: rivals can't see each
+            # other's holdings, and a taunt ("PLTR riding momentum") would
+            # announce them — the page shows exactly what the agents see.
             conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "
                          "message) VALUES (?,?,?,?)",
-                         (rnd["id"], aid, ts, message))
+                         (rnd["id"], aid, ts, forward._redact_tickers(message)))
         conn.commit()
         if verbose:
             arrow = "▲" if returns[aid] >= 0 else "▼"

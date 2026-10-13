@@ -338,10 +338,14 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
         a["positions"] = pos
         total = a["value"] or 1.0
         invested = sum(p["value"] for p in pos)
-        unreal = sum(p["value"] - p["qty"] * (p["cost"] or p["price"] or 0) for p in pos)
+        unreal = sum(p["qty"] * ((p["price"] or 0) - (p["cost"] or p["price"] or 0)) for p in pos)
+        # exact cash + holdings, not the rounded return %, so an agent that
+        # never sold doesn't show "$0.01 booked" from rounding residue
+        exact = a["current_capital"] + sum(p["qty"] * (p["price"] or 0) for p in pos)
         a["exposure_pct"] = round(invested / total * 100) if total else 0
         a["unrealized"] = round(unreal, 2)
-        a["realized"] = round((a["value"] - a["starting_capital"]) - unreal, 2)
+        realized = (exact - a["starting_capital"]) - unreal
+        a["realized"] = 0.0 if abs(realized) < 0.005 else round(realized, 2)
         a["alloc"] = ([{"label": p["symbol"], "pct": max(0.0, p["value"] / total * 100)}
                        for p in pos] +
                       [{"label": "cash", "pct": max(0.0, a["current_capital"] / total * 100)}])

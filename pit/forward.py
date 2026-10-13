@@ -245,7 +245,8 @@ def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
         n_exec = _execute(conn, rnd["id"], aid, st, orders, price, date)
         if message:
             conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "
-                         "message) VALUES (?,?,?,?)", (rnd["id"], aid, _now(), message))
+                         "message) VALUES (?,?,?,?)", (rnd["id"], aid, _now(),
+                                                    _redact_tickers(message)))
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                      (json.dumps(cfg), aid))
@@ -908,7 +909,7 @@ def _share_lesson(conn, round_id, agent_id, note) -> None:
         "INSERT INTO agent_messages (round_id, agent_id, ts, kind, message) "
         "VALUES (?,?,?,'lesson',?)",
         (round_id, agent_id, local_ts(),
-         f"\U0001f4dd Lesson from this round: {note}"))
+         f"\U0001f4dd Lesson from this round: {_redact_tickers(note)}"))
 
 
 def _self_reflection(old_notes, own_trades, return_pct, won: bool,
