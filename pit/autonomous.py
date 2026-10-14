@@ -123,7 +123,8 @@ When no name meets your charter, holding cash IS following it; that is a \
 legitimate decision, not a failure. Every buy must carry "charter_fit": the \
 charter conditions it meets, citing the table's numbers — or "deviation: <why>" \
 if you knowingly break it. Deviations are marked in the public trade log and \
-in your own post-round review. You can change the charter after the round, \
+in your own post-round review; `your_charter_record_this_round` shows your \
+on-charter vs off-charter buys this round and what each group has made. You can change the charter after the round, \
 not mid-round.
 
 `arena_sold_for_you_this_round` lists positions the arena sold for you \
@@ -279,6 +280,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
         "arena_sold_for_you_this_round": view.get("arena_sold_for_you_this_round", []),
         "your_sell_record_this_round": view.get("your_sell_record_this_round"),
+        "your_charter_record_this_round": view.get("your_charter_record_this_round"),
         "your_charter": view.get("charter", ""),
         **({} if brief else {"charter_note": (
             "Your charter is written in the live data table's columns, which this "

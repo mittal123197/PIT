@@ -509,6 +509,7 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
             "orders_not_executed_last_tick": _LAST_REJECTIONS.get(aid, []),
             "arena_sold_for_you_this_round": _forced_exits(conn, rnd["id"], aid),
             "your_sell_record_this_round": forward.sell_record(conn, rnd["id"], aid, price),
+            "your_charter_record_this_round": forward.charter_record(conn, rnd["id"], aid, price),
         }
         jobs.append({"aid": aid, "st": st, "name": name, "cfg": cfg, "view": view})
 

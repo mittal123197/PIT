@@ -51,17 +51,22 @@ def write_charter(model: str | None, name: str, rival_charters: dict[str, str],
 
 
 def revise_charter(model: str | None, charter: str, own_trades: list, return_pct: float,
-                   rank: int, n: int) -> str:
+                   rank: int, n: int, discipline: dict | None = None) -> str:
     """Keep or rewrite the charter from this round's own results."""
     from .llm import DEFAULT_MODEL, llm_chat
     payload = {
         "your_charter": charter,
         "your_result": f"finished {rank} of {n} at {return_pct:+.2f}%",
         "your_own_trades": own_trades[:30],
+        "your_charter_discipline": discipline or {},
         "instruction": (
             "Decide whether your charter should change after this round. Keep it "
             "if it worked or if one round is too little evidence; refine it if a "
-            "specific part failed; rewrite it if the whole approach was wrong. No "
+            "specific part failed; rewrite it if the whole approach was wrong. "
+            "your_charter_discipline shows how many buys fit your charter vs. "
+            "deviated and what each group made. If you deviated a lot (e.g. "
+            "because your setup rarely appears), either commit to waiting for it "
+            "or rewrite the charter into one you will actually follow. No "
             "specific tickers. Keep a core approach different from your rivals'. "
             "<=350 chars. Return JSON "
             "{\"decision\":\"keep\"|\"refine\"|\"rewrite\",\"charter\":\"...\"}."),

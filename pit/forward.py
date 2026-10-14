@@ -825,6 +825,47 @@ def sell_record(conn, round_id, agent_id, price) -> dict:
             "trading_costs_paid_so_far": round(paid, 2)}
 
 
+def _quote_px(sym):
+    from . import market
+    try:
+        return (market.quote(sym) or {}).get("price")
+    except Exception:
+        return None
+
+
+def _is_off_charter(reason: str | None) -> bool:
+    r = reason or ""
+    return r.startswith("⚠ off-charter") or r.startswith("⚠ no charter")
+
+
+def charter_record(conn, round_id, agent_id, price) -> dict:
+    """The agent's charter discipline this round, as plain numbers: buys that
+    fit its charter vs. buys it marked (or left) off-charter, and what each
+    group has made so far (exit = its later sells, else the current price).
+    An agent whose setup never appeared went 13-for-13 off-charter, lost
+    most, and kept the charter unchanged — this puts that in front of it."""
+    rows = conn.execute("SELECT id, symbol, side, qty, price, reason FROM trades "
+                        "WHERE round_id=? AND agent_id=? ORDER BY id",
+                        (round_id, agent_id)).fetchall()
+    groups = {"on_charter": {"buys": 0, "net_usd": 0.0},
+              "off_charter": {"buys": 0, "net_usd": 0.0}}
+    for b in rows:
+        if b["side"] != "buy":
+            continue
+        later = [r for r in rows if r["side"] == "sell" and r["symbol"] == b["symbol"]
+                 and r["id"] > b["id"]]
+        q = sum(r["qty"] for r in later)
+        exit_px = (sum(r["qty"] * r["price"] for r in later) / q) if q else price(b["symbol"])
+        if not exit_px:
+            continue
+        g = groups["off_charter" if _is_off_charter(b["reason"]) else "on_charter"]
+        g["buys"] += 1
+        g["net_usd"] += b["qty"] * (exit_px - b["price"])
+    for g in groups.values():
+        g["net_usd"] = round(g["net_usd"], 2)
+    return groups
+
+
 def _own_trades(conn, round_id, agent_id) -> list[dict]:
     """The agent's fills this round, each flagged forced_by_arena where the
     arena made it. Unflagged, the deadline close-out read like the agent's own
@@ -866,7 +907,8 @@ def _reflect_winner(conn, round_id, wa, return_pct) -> str:
     if cfg.get("charter"):
         from .charter import revise_charter
         n = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=?", (round_id,)).fetchone()[0]
-        cfg["charter"] = revise_charter(cfg.get("model"), cfg["charter"], trades, return_pct, 1, n)
+        cfg["charter"] = revise_charter(cfg.get("model"), cfg["charter"], trades, return_pct, 1, n,
+                                        charter_record(conn, round_id, wa["id"], _quote_px))
     conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                  (json.dumps(cfg), wa["id"]))
     _share_lesson(conn, round_id, wa["id"], note)
@@ -894,7 +936,8 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
         better = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=? "
                               "AND final_return_pct > ?", (round_id, return_pct)).fetchone()[0]
         new_cfg["charter"] = revise_charter(old_cfg.get("model"), old_cfg["charter"], trades,
-                                            return_pct, min(n, better + 1), n)
+                                            return_pct, min(n, better + 1), n,
+                                            charter_record(conn, round_id, la["id"], _quote_px))
     new_id = conn.execute(
         """INSERT INTO agents (lineage_id, generation, strategy_config,
            activity_profile, rating, seeded_from_trade_agent_id, mutation_note,
