@@ -163,7 +163,8 @@ its sector, price, TODAY's session so far (open% = change since today's open, \
 vsVWAP% = price vs today's volume-weighted average price, 15m%/30m% = change \
 over the last 15/30 minutes, dayRange% = where the price sits in today's \
 high-low range, 0 = at the low, 100 = at the high, volPace = today's volume \
-vs a normal day at this hour), then the daily view: recent returns \
+vs a normal day at this hour; in the first minutes after the open some of \
+these are still "." because there are too few bars yet), then the daily view: recent returns \
 (1d/5d/20d), trend (price vs its 20- and \
 50-day moving average), RSI14, position in its 52-week range, today's volume \
 vs normal, and fundamentals — forward P/E, profit margin, revenue growth, \

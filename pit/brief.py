@@ -164,11 +164,18 @@ def _download_intraday(symbols: list[str]):
     return frames
 
 
-def _intraday(close, high, low, volume, avg_daily_vol, minutes_open: float) -> dict:
+def _intraday(close, high, low, volume, avg_daily_vol, minutes_open: float,
+              open_=None) -> dict:
     close = close.dropna()
-    if len(close) < 2:
+    if len(close) < 1:
         return {}
-    px, op = float(close.iloc[-1]), float(close.iloc[0])
+    px = float(close.iloc[-1])
+    # today's real opening price (first bar's OPEN), not the first bar's close —
+    # and usable from the very first bar, so the 09:31 decision isn't blind
+    try:
+        op = float(open_.reindex(close.index).iloc[0]) if open_ is not None else float(close.iloc[0])
+    except Exception:
+        op = float(close.iloc[0])
     out = {"o": _pct(px, op)}
     vol = volume.reindex(close.index).fillna(0)
     tp = (high.reindex(close.index) + low.reindex(close.index) + close) / 3
@@ -304,7 +311,8 @@ def _intraday_all(mode: str, symbols: list[str], avgvol: dict) -> dict:
                 if s_ in out or s_ not in df["Close"].columns:
                     continue
                 m = _intraday(df["Close"][s_], df["High"][s_], df["Low"][s_],
-                              df["Volume"][s_], avgvol.get(s_), minutes_open)
+                              df["Volume"][s_], avgvol.get(s_), minutes_open,
+                              open_=df["Open"][s_] if "Open" in df else None)
                 if m:
                     out[s_] = m
         except Exception:
