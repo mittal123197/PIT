@@ -279,6 +279,10 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "arena_sold_for_you_this_round": view.get("arena_sold_for_you_this_round", []),
         "your_sell_record_this_round": view.get("your_sell_record_this_round"),
         "your_charter": view.get("charter", ""),
+        **({} if brief else {"charter_note": (
+            "Your charter is written in the live data table's columns, which this "
+            "mode doesn't provide — apply its spirit using what your research "
+            "tools return; no charter_fit is needed here.")}),
         "your_notes": view.get("notes", ""),
         "shared_guidelines": guidelines,
         "arena_risk": view.get("risk"),
@@ -351,7 +355,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
 
         if data.get("done") or force:
             _log(turn + 1, active_model, data)
-            return (_clean_orders(data.get("orders", [])),
+            return (_clean_orders(data.get("orders", []), charter_checkable=bool(brief)),
                     str(data.get("notes", ""))[:600],
                     str(data.get("message", ""))[:200], trace)
 
@@ -382,7 +386,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
     return [], view.get("notes", ""), "", trace
 
 
-def _clean_orders(orders: list) -> list[dict]:
+def _clean_orders(orders: list, charter_checkable: bool = True) -> list[dict]:
     out = []
     for o in orders or []:
         try:
@@ -391,7 +395,9 @@ def _clean_orders(orders: list) -> list[dict]:
                 continue
             reason = str(o.get("reason", ""))[:160]
             fit = str(o.get("charter_fit", "")).strip()
-            if side == "buy" and fit.lower().startswith("deviation"):
+            if not charter_checkable:
+                pass   # research mode (replay): no data table to check a charter against
+            elif side == "buy" and fit.lower().startswith("deviation"):
                 reason = ("⚠ off-charter: " + fit[len("deviation"):].lstrip(" :—-")[:80]
                           + " | " + reason)[:200]
             elif side == "buy" and not fit:
