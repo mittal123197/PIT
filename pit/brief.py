@@ -220,7 +220,20 @@ RULE_FIELDS = {"1d%": "d1", "5d%": "d5", "20d%": "d20", "vs20dMA%": "v20",
                "vol-x": "volx", "dayVol%": "dvol",
                # today's session (intraday)
                "open%": "o", "vsVWAP%": "vwap", "15m%": "m15", "30m%": "m30",
-               "dayRange%": "rng", "volPace": "pace"}
+               "dayRange%": "rng", "volPace": "pace",
+               # fundamentals (slow-moving; the history uses today's values)
+               "fwdPE": "fpe", "margin%": "margin", "revGr%": "revg", "epsGr%": "epsg",
+               "ROE%": "roe", "D/E": "de", "tgt-upside%": "tgtup"}
+
+
+def fund_features(f: dict | None, px: float | None) -> dict:
+    """The table's fundamental columns as rule/charter fields."""
+    f = f or {}
+    tgt = f.get("analyst_target_price")
+    return {"fpe": f.get("forward_pe"), "margin": f.get("profit_margin_pct"),
+            "revg": f.get("revenue_growth_pct"), "epsg": f.get("earnings_growth_pct"),
+            "roe": f.get("return_on_equity_pct"), "de": f.get("debt_to_equity"),
+            "tgtup": _pct(tgt, px) if tgt and px else None}
 
 
 def _f(v, nd=1):
@@ -288,6 +301,7 @@ def _build(mode: str) -> dict | None:
     intra = _intraday_all(mode, symbols, {r[0]: r[2].get("avgvol") for r in rows})
     for sym, sec, t, f in rows:
         t.update({k: v for k, v in intra.get(sym, {}).items()})
+        t.update(fund_features(f, t.get("px")))
         features[sym] = {k: t.get(k) for k in RULE_FIELDS.values()}
     return {"rows": rows, "prices": prices, "features": features,
             "market": _market_line(intra, mode),

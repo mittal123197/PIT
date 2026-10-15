@@ -143,6 +143,19 @@ def build_panel(mode: str = "top100", verbose: bool = True) -> pd.DataFrame | No
     if not parts:
         return None
     df = pd.concat(parts).reset_index(names="ts")
+    # fundamentals: today's values per name (they barely move in 60 days);
+    # analyst upside is recomputed against each bar's price
+    fund = brief._load_fund()
+    rows = {}
+    for sym in df["sym"].unique():
+        f = (fund.get(sym) or {}).get("f") or {}
+        rows[sym] = brief.fund_features(f, 1.0)
+        rows[sym]["_tgt"] = f.get("analyst_target_price")
+    fd = pd.DataFrame.from_dict(rows, orient="index")
+    for col in ("fpe", "margin", "revg", "epsg", "roe", "de"):
+        df[col] = df["sym"].map(fd[col]).astype(float)
+    tgt = df["sym"].map(fd["_tgt"]).astype(float)
+    df["tgtup"] = (tgt / df["px"] - 1) * 100
     if verbose:
         print(f"[history] built {len(df):,} snapshots for {df['sym'].nunique()} names "
               f"over {df['day'].nunique()} days in {time.time() - t:.0f}s", flush=True)
@@ -157,7 +170,7 @@ def panel(mode: str = "top100", verbose: bool = True) -> pd.DataFrame | None:
     today = time.strftime("%Y-%m-%d")
     if _PANEL["day"] == today and _PANEL["df"] is not None:
         return _PANEL["df"]
-    path = _DIR / f"panel_{mode}_{today}.pkl"
+    path = _DIR / f"panel_v2_{mode}_{today}.pkl"
     df = None
     if path.exists():
         try:
@@ -174,7 +187,7 @@ def panel(mode: str = "top100", verbose: bool = True) -> pd.DataFrame | None:
         if df is None:
             return None
         _DIR.mkdir(parents=True, exist_ok=True)
-        for old in _DIR.glob(f"panel_{mode}_*.pkl"):
+        for old in _DIR.glob(f"panel*_{mode}_*.pkl"):
             old.unlink(missing_ok=True)
         df.to_pickle(path)
     _PANEL.update(day=today, df=df)
