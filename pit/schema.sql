@@ -184,7 +184,8 @@ CREATE TABLE IF NOT EXISTS guideline_proposals (
     created_at     TEXT NOT NULL,
     proposer       TEXT,                  -- lineage name that proposed it
     spec           TEXT,
-    evidence       TEXT
+    evidence       TEXT,
+    debate         TEXT                   -- case / objections / split tests / rebuttal (JSON)
 );
 
 CREATE TABLE IF NOT EXISTS guideline_votes (

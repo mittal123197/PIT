@@ -797,7 +797,7 @@ def guidelines_overview(conn: sqlite3.Connection) -> dict:
         "SELECT text, status FROM guidelines"))}
     proposals = _rows(conn.execute(
         """SELECT p.id, p.kind, p.practice, p.proposed_text, p.resolution,
-                  p.proposer, p.evidence, SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
+                  p.proposer, p.evidence, p.debate, SUM(v.vote='agree') AS agree, COUNT(v.id) AS total
            FROM guideline_proposals p
            LEFT JOIN guideline_votes v ON v.proposal_id = p.id
            GROUP BY p.id ORDER BY p.id DESC LIMIT 10"""))
@@ -805,6 +805,10 @@ def guidelines_overview(conn: sqlite3.Connection) -> dict:
         # an adopted rule can be retired later — say so instead of a bare "adopted"
         p["now"] = status_by_text.get(p["proposed_text"]) if p["kind"] == "add" else None
         p["ledger"] = _ledger(p.get("evidence"))
+        try:
+            p["debate"] = json.loads(p["debate"]) if p.get("debate") else None
+        except Exception:
+            p["debate"] = None
     for g in active + retired:
         g["ledger"] = _ledger(g.get("evidence"))
     return {"active": active, "retired": retired, "proposals": proposals}

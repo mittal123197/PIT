@@ -849,7 +849,8 @@ def _agent_propose(lin: dict, active: list[dict], trades: list[dict] | None = No
 
 
 def _agent_vote(lin: dict, proposal: dict, active: list[str],
-                trades: list[dict] | None = None, ledger: dict | None = None) -> tuple[str, str]:
+                trades: list[dict] | None = None, ledger: dict | None = None,
+                debate_rec: dict | None = None) -> tuple[str, str]:
     cfg = _lineage_cfg(lin)
     label = "DO" if proposal.get("practice") == "good" else "AVOID"
     data = _ask_json(cfg.get("model"),
@@ -861,8 +862,9 @@ def _agent_vote(lin: dict, proposal: dict, active: list[str],
          "current_rules": active,
          "proposal": (f"{proposal['kind'].upper()} rule — {label}: {proposal['text']}"),
          "proposer_says": proposal.get("evidence", ""),
-         "arena_backtest_on_all_logged_buys": evidence_label(ledger) if ledger else
-             "not applicable",
+         "arena_research": evidence_label(ledger) if ledger else "not applicable",
+         **({"debate": {"objections": debate_rec["objections"],
+                        "proposer_rebuttal": debate_rec["rebuttal"]}} if debate_rec else {}),
          "instruction": (
              "This rule would bind every agent, including you. The arena backtest "
              "above is hard data from the pool's real trades — weigh it above the "
@@ -876,6 +878,70 @@ def _agent_vote(lin: dict, proposal: dict, active: list[str],
         return "abstain", "no valid vote returned"
     ev = str(data.get("evidence_from_my_trades", "")).strip()
     return data["vote"], (str(data.get("reason", "")) + (f" | evidence: {ev}" if ev else ""))[:300]
+
+
+def _split_test(spec: dict, practice: str, cond) -> dict | None:
+    """Re-run the market research only where an extra condition holds — the
+    narrower test an objector asked for ("I bet it fails on down days")."""
+    one = parse_spec([cond], spec.get("action", "buy"))
+    if not one:
+        return None
+    try:
+        from . import history
+        from .market import TRADE_UNIVERSE_MODE
+        df = history.panel() if TRADE_UNIVERSE_MODE == "top100" else None
+        if df is None:
+            return None
+        m = history._mask(df, one["when"])
+        if m is None:
+            return None
+        ev = history.research_rule(spec, practice, df[m])
+        if ev:
+            ev["condition"] = f"{one['when'][0][0]} {one['when'][0][1]} {one['when'][0][2]:g}"
+        return ev
+    except Exception:
+        return None
+
+
+def debate(p: dict, ledger: dict | None, lineages: list[dict]) -> dict:
+    """Case -> objections (each other agent, own model, may request a split
+    test the arena runs on the history) -> proposer's rebuttal / withdrawal.
+    The record goes to the voters and onto the leaderboard."""
+    from concurrent.futures import ThreadPoolExecutor
+    label = "DO" if p["practice"] == "good" else "AVOID"
+    case = {"rule": f"{label}: {p['text']}", "proposer": p["proposer"],
+            "proposer_says": p.get("evidence", ""), "research": evidence_label(ledger)}
+    others = [l for l in lineages if l["name"] != p["proposer"]]
+
+    def _object(l):
+        data = _ask_json(_lineage_cfg(l).get("model"),
+            "You are a trading agent debating a proposed rule for your pool. JSON only.",
+            {"you": l["name"], "case": case, "arena": ARENA_FACTS,
+             "instruction": (
+                 "Raise ONE concrete objection to this rule — a specific reason it may "
+                 "not hold (a market condition where it breaks, a confound, overlap "
+                 "with an existing rule, too small an effect after costs). You may "
+                 "request ONE split test: a condition [column, op, value] over the "
+                 "data-table columns; the arena will re-run the research only where it "
+                 "holds. Return JSON {\"objection\":\"<=200 chars\",\"test\":[col,op,val] or null}")})
+        data = data or {}
+        test = data.get("test")
+        res = _split_test(p["spec"], p["practice"], test) if isinstance(test, list) and len(test) == 3 else None
+        return {"by": l["name"], "objection": str(data.get("objection", ""))[:240],
+                "test": res and {"condition": res.get("condition"), "verdict": res.get("verdict"),
+                                 "t": res.get("t"), "avg_match": res.get("avg_match"),
+                                 "avg_other": res.get("avg_other"), "days": res.get("days")}}
+    with ThreadPoolExecutor(max_workers=max(1, len(others))) as ex:
+        objections = list(ex.map(_object, others))
+    prop = next((l for l in lineages if l["name"] == p["proposer"]), None)
+    reb = _ask_json(_lineage_cfg(prop).get("model") if prop else None,
+        "You are a trading agent defending your proposed rule. JSON only.",
+        {"you": p["proposer"], "case": case, "objections": objections,
+         "instruction": ("Answer the objections in <=240 chars, citing the split-test "
+                         "results where given. If they show the rule doesn't hold, "
+                         "withdraw it. Return JSON {\"rebuttal\":\"...\",\"withdraw\":true|false}")}) or {}
+    return {"case": case, "objections": objections,
+            "rebuttal": str(reb.get("rebuttal", ""))[:300], "withdrawn": bool(reb.get("withdraw"))}
 
 
 def _spec_key(p: dict):
@@ -969,11 +1035,24 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
                          f"this condition (need {_min_probation()})")
             continue
         texts = active_texts(conn)
+        deb = None
+        if p.get("spec"):
+            try:
+                deb = debate(p, ledger, lineages)
+            except Exception:
+                deb = None
+            if deb:
+                conn.execute("UPDATE guideline_proposals SET debate=? WHERE id=?",
+                             (json.dumps(deb), pid))
+                r["debate"] = deb
+                if deb.get("withdrawn"):
+                    r["note"] = "withdrawn by the proposer after the debate"
+                    continue
 
         def _v(l):
             if l["name"] == p["proposer"]:
                 return "agree", "proposer"
-            return _agent_vote(l, p, texts, trades[l["id"]], ledger)
+            return _agent_vote(l, p, texts, trades[l["id"]], ledger, deb)
         with ThreadPoolExecutor(max_workers=len(lineages)) as ex:
             votes = list(ex.map(_v, lineages))
         for lin, (vote, reason) in zip(lineages, votes):
@@ -1011,6 +1090,7 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
             _apply(conn, r["_p"], tier=r.get("tier"), ledger=r["ledger"])
         res = ("accepted" if r["accepted"] else
                "over_limit" if "adoption limit" in r.get("note", "") else
+               "withdrawn" if "withdrawn" in r.get("note", "") else
                "vetoed" if r.get("note") else "rejected")
         conn.execute("UPDATE guideline_proposals SET resolution=?, resolved_at=? WHERE id=?",
                      (res, _now(), r["proposal_id"]))

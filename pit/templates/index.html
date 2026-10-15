@@ -215,7 +215,13 @@
     <tbody>
     {% for p in constitution.proposals %}
       <tr>
-        <td style="min-width:220px;max-width:520px;">{{ p.proposed_text }}</td>
+        <td style="min-width:220px;max-width:520px;">{{ p.proposed_text }}
+          {% if p.debate %}<details style="margin-top:6px;font-size:12px;color:var(--ink-soft);">
+            <summary style="cursor:pointer;color:var(--ink-faint);">debate ({{ p.debate.objections|length }} objection{{ 's' if p.debate.objections|length != 1 }}{{ ', withdrawn' if p.debate.withdrawn }})</summary>
+            {% for o in p.debate.objections %}<div style="margin:6px 0 0;"><b class="agentname" style="font-size:11.5px;">{{ o.by }}:</b> {{ o.objection }}
+              {% if o.test %}<div class="mono" style="font-size:11px;color:var(--ink-faint);">split test where {{ o.test.condition }}: {{ o.test.verdict }}{% if o.test.t is not none %}, t={{ '%+.2f'|format(o.test.t) }}{% endif %}{% if o.test.days %} over {{ o.test.days }} days{% endif %}</div>{% endif %}</div>{% endfor %}
+            {% if p.debate.rebuttal %}<div style="margin-top:6px;"><b class="agentname" style="font-size:11.5px;">{{ p.proposer }} (rebuttal):</b> {{ p.debate.rebuttal }}</div>{% endif %}
+          </details>{% endif %}</td>
         <td class="hide-sm agentname" style="font-size:12.5px;">{{ p.proposer or '—' }}</td>
         <td><span class="pill status">{{ p.kind }}</span>
           <span class="pill {{ 'win' if p.practice == 'good' else 'lose' }}">
@@ -227,6 +233,7 @@
           {% if p.resolution == 'accepted' and p.now == 'retired' %}<span class="pill status">adopted · retired</span>
           {% elif p.resolution == 'accepted' %}<span class="pill win">✓ adopted</span>
           {% elif p.resolution == 'over_limit' %}<span class="pill status" title="won its vote, but only the best-supported rule is adopted each round">passed · over limit</span>
+          {% elif p.resolution == 'withdrawn' %}<span class="pill status" title="the proposer withdrew it after the debate">withdrawn</span>
           {% elif p.resolution == 'vetoed' %}<span class="pill lose" title="{{ p.ledger.label if p.ledger else '' }}">✕ {{ 'no evidence yet' if p.ledger and p.ledger.verdict == 'untested' else 'no edge' if p.ledger and p.ledger.verdict == 'inconclusive' else 'vetoed by data' }}</span>
           {% elif p.resolution == 'rejected' %}<span class="pill lose">✕ rejected</span>
           {% else %}<span class="pill status">open</span>{% endif %}

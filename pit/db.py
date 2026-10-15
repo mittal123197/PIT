@@ -91,6 +91,8 @@ _COLUMN_ADDITIONS = [
     ("rounds", "replay_anchor", "TEXT"),
     # deadline price of every symbol traded, for exit-rule backtests
     ("rounds", "end_prices", "TEXT"),
+    # the case / objections / split tests / rebuttal behind each vote
+    ("guideline_proposals", "debate", "TEXT"),
 ]
 
 
