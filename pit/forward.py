@@ -825,6 +825,16 @@ def sell_record(conn, round_id, agent_id, price) -> dict:
             "trading_costs_paid_so_far": round(paid, 2)}
 
 
+def _rival_charters(conn, lineage_id) -> dict:
+    out = {}
+    for r in conn.execute("""SELECT l.name, json_extract(a.strategy_config, '$.charter') c
+                             FROM lineages l JOIN agents a ON a.id = l.current_agent_id
+                             WHERE l.id != ?""", (lineage_id,)).fetchall():
+        if r["c"]:
+            out[r["name"]] = r["c"]
+    return out
+
+
 def _quote_px(sym):
     from . import market
     try:
@@ -910,7 +920,8 @@ def _reflect_winner(conn, round_id, wa, return_pct) -> str:
         from .charter import apply as _apply_charter
         _apply_charter(cfg, revise_charter(cfg.get("model"), cfg["charter"], trades, return_pct, 1, n,
                                            charter_record(conn, round_id, wa["id"], _quote_px),
-                                           card=cfg.get("charter_card"), spec=cfg.get("charter_spec")))
+                                           card=cfg.get("charter_card"), spec=cfg.get("charter_spec"),
+                                           rivals=_rival_charters(conn, wa["lineage_id"])))
     conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                  (json.dumps(cfg), wa["id"]))
     _share_lesson(conn, round_id, wa["id"], note)
@@ -943,7 +954,8 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
                                                return_pct, min(n, better + 1), n,
                                                charter_record(conn, round_id, la["id"], _quote_px),
                                                card=old_cfg.get("charter_card"),
-                                               spec=old_cfg.get("charter_spec")))
+                                               spec=old_cfg.get("charter_spec"),
+                                               rivals=_rival_charters(conn, la["lineage_id"])))
     new_id = conn.execute(
         """INSERT INTO agents (lineage_id, generation, strategy_config,
            activity_profile, rating, seeded_from_trade_agent_id, mutation_note,

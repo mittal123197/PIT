@@ -244,6 +244,15 @@ def research_rule(spec: dict, practice: str, df: pd.DataFrame | None = None) -> 
 
 # ---- charter backtest ------------------------------------------------------
 
+def split(df: pd.DataFrame, train_frac: float = 2 / 3):
+    """(train, test) by trading day — the charter search only ever sees the
+    earlier days; the final charter is scored on the later, unseen ones so
+    repeated refinement can't just curve-fit the history."""
+    days = sorted(df["day"].unique())
+    cut = days[int(len(days) * train_frac)]
+    return df[df["day"] < cut], df[df["day"] >= cut]
+
+
 def backtest_charter(spec: dict, df: pd.DataFrame | None = None) -> dict | None:
     """Replay a charter's entry/exit conditions over the history: enter at a
     bar where every entry condition holds, exit at the first later bar of the
@@ -318,6 +327,9 @@ def backtest_charter(spec: dict, df: pd.DataFrame | None = None) -> dict | None:
 def card_text(card: dict | None) -> str:
     if not card:
         return "not backtested"
+    if "train" in card:     # search card: in-sample + out-of-sample
+        tr, te = card.get("train"), card.get("test")
+        return (f"search days: {card_text(tr)} | unseen later days: {card_text(te)}")
     if not card.get("trades"):
         return f"never triggered in {card.get('days', '?')} days of history"
     return (f"{card['days']}-day backtest: {card['setups_per_day']} trades/day, avg "

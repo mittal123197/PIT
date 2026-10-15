@@ -74,17 +74,44 @@ def _ask(model: str | None, payload: dict) -> dict:
         return {}
 
 
-def backtest(spec: dict | None) -> dict | None:
-    if not spec:
-        return None
+def _panel():
     try:
         from . import history
         from .market import TRADE_UNIVERSE_MODE
-        if TRADE_UNIVERSE_MODE != "top100":
-            return None
-        return history.backtest_charter(spec)
+        return history.panel() if TRADE_UNIVERSE_MODE == "top100" else None
     except Exception:
         return None
+
+
+def backtest(spec: dict | None, part: str = "both") -> dict | None:
+    """part='train' — the earlier days the search may look at; 'both' — a
+    card with the train result AND the unseen later days (what agents and the
+    page show)."""
+    df = _panel()
+    if not spec or df is None:
+        return None
+    from . import history
+    try:
+        tr, te = history.split(df)
+        train = history.backtest_charter(spec, tr)
+        if part == "train":
+            return train
+        return {"train": train, "test": history.backtest_charter(spec, te)}
+    except Exception:
+        return None
+
+
+def _score(card: dict | None) -> float:
+    """Rank charter versions by the search days' result."""
+    c = (card or {}).get("train", card) or {}
+    if not c.get("trades"):
+        return -99.0
+    t = c.get("t")
+    if t is None:
+        return -50.0                 # too few trades to judge
+    if t <= -2:
+        return -80.0 + t             # reliably losing ranks below "too few to judge"
+    return float(t)
 
 
 def card_text(card: dict | None, spec: dict | None = None) -> str:
@@ -119,7 +146,8 @@ def write_charter(model: str | None, name: str, rival_charters: dict[str, str],
 
 def revise_charter(model: str | None, charter: str, own_trades: list, return_pct: float,
                    rank: int, n: int, discipline: dict | None = None,
-                   card: dict | None = None, spec: dict | None = None) -> dict:
+                   card: dict | None = None, spec: dict | None = None,
+                   tried: list | None = None, rivals: dict | None = None) -> dict:
     """Keep or rewrite the charter from this round's own results and its
     backtest. Returns {"charter", "spec"} (unchanged on keep / failure)."""
     data = _ask(model, {
@@ -130,16 +158,22 @@ def revise_charter(model: str | None, charter: str, own_trades: list, return_pct
                         else "pre-round review: no trades yet"),
         "your_own_trades": own_trades[:30],
         "your_charter_discipline": discipline or {},
+        **({"versions_already_tried": tried} if tried else {}),
+        **({"rivals_charters": rivals} if rivals else {}),
         "instruction": (
             "Decide whether your charter should change. your_charter_backtest is "
-            "how your checkable spec did on ~60 days of real market data (after "
-            "trading costs); weigh it above one round. Keep it if it works or the "
+            "how your checkable spec did on real market data (after trading costs; "
+            "'search days' are the history you may tune on, 'unseen later days' "
+            "show whether it holds up) — weigh it above one round. Don't repeat a "
+            "version already tried; a real edge should be a genuine idea, not a "
+            "lucky threshold. Keep it if it works or the "
             "evidence is thin; refine it if a specific part failed; rewrite it if "
             "the approach has no edge. your_charter_discipline shows buys that fit "
             "your charter vs. deviated and what each made — if you deviated a lot "
             "(e.g. your setup rarely appears), commit to waiting for it or rewrite "
-            "it into one you will follow. Keep a core approach different from your "
-            "rivals'. No specific tickers. The charter text must describe the "
+            "it into one you will follow. Your core approach must stay DIFFERENT "
+            "from every charter in rivals_charters (a different idea of where the "
+            "edge is, not the same signal with other numbers). No specific tickers. The charter text must describe the "
             "style itself (what you buy, when you sell, sizing) — not commentary on "
             "the backtest. <=350 chars. " + _SPEC_HELP +
             " Return JSON {\"decision\":\"keep\"|\"refine\"|\"rewrite\",\"charter\":\"...\","
@@ -158,6 +192,39 @@ def apply(cfg: dict, result: dict) -> dict:
     if result.get("spec"):
         cfg["charter_spec"] = result["spec"]
     cfg["charter_card"] = backtest(cfg.get("charter_spec"))
+    return cfg
+
+
+def search(cfg: dict, model: str | None, iters: int | None = None,
+           verbose: bool = False, name: str = "", rivals: dict | None = None) -> dict:
+    """Backtest -> refine -> backtest, up to `iters` times (PIT_CHARTER_ITERS,
+    default 3), stopping early once the search days show an edge. Every
+    version tried is shown to the agent so it doesn't repeat itself; the
+    version with the best search-days result is kept and then scored on the
+    unseen later days."""
+    import os
+    iters = iters if iters is not None else int(os.getenv("PIT_CHARTER_ITERS", "3"))
+    tried = [{"charter": cfg["charter"], "spec": cfg.get("charter_spec"),
+              "card": cfg.get("charter_card")}]
+    for _ in range(iters):
+        best = max(tried, key=lambda v: _score(v["card"]))
+        if ((best["card"] or {}).get("train") or {}).get("verdict") == "edge":
+            break
+        res = revise_charter(model, best["charter"], [], 0.0, 0, 0,
+                             card={"train": (best["card"] or {}).get("train")},
+                             spec=best["spec"], rivals=rivals,
+                             tried=[{"spec": v["spec"],
+                                     "search_days": card_text((v["card"] or {}).get("train"))}
+                                    for v in tried])
+        if res["spec"] == best["spec"]:
+            break                                           # agent chose to keep it
+        tried.append({"charter": res["charter"], "spec": res["spec"],
+                      "card": backtest(res["spec"])})
+        if verbose:
+            print(f"[charter] {name} tried: {card_text(tried[-1]['card'])}", flush=True)
+    best = max(tried, key=lambda v: _score(v["card"]))
+    cfg["charter"], cfg["charter_spec"], cfg["charter_card"] = (best["charter"], best["spec"],
+                                                               best["card"])
     return cfg
 
 
@@ -187,14 +254,13 @@ def ensure_charters(conn, arena: str, verbose: bool = True) -> None:
             existing[n] = cfg["charter"]
         elif not cfg.get("charter_spec") or "charter_card" not in cfg:
             # older charter: get its checkable spec via a keep-or-refine pass
-            apply(cfg, revise_charter(model, cfg["charter"], [], 0.0, 0, 0, spec=None))
-        # one pre-round refinement from the backtest card
+            apply(cfg, revise_charter(model, cfg["charter"], [], 0.0, 0, 0, spec=None,
+                                      rivals={k: v for k, v in existing.items() if k != n}))
+        # pre-round search: refine from the backtest a few times, keep the best
         if cfg.get("charter_card") is not None:
-            res = revise_charter(model, cfg["charter"], [], 0.0, 0, 0,
-                                 card=cfg["charter_card"], spec=cfg.get("charter_spec"))
-            if res["charter"] != cfg["charter"] or res["spec"] != cfg.get("charter_spec"):
-                apply(cfg, res)
-                existing[n] = cfg["charter"]
+            search(cfg, model, verbose=verbose, name=n,
+                   rivals={k: v for k, v in existing.items() if k != n})
+            existing[n] = cfg["charter"]
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?", (json.dumps(cfg), aid))
         conn.commit()
         if verbose:
