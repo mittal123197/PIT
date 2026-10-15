@@ -248,13 +248,20 @@ def _gemini_chat(model: str, messages: list, temperature: float,
     body = {"model": model, "messages": messages, "temperature": temperature}
     if json_mode:
         body["response_format"] = {"type": "json_object"}
-    try:
-        data = _post(body)
-    except urllib.error.HTTPError as e:
-        if e.code == 400 and json_mode:
-            body.pop("response_format", None)
+    data = None
+    # free-tier keys often get 503 ("high demand") / 429 (rate limit): brief
+    # backoff and retry instead of losing the whole decision
+    for attempt in range(3):
+        try:
             data = _post(body)
-        else:
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 400 and json_mode and "response_format" in body:
+                body.pop("response_format", None)
+                continue
+            if e.code in (429, 503) and attempt < 2:
+                time.sleep(4 * (attempt + 1))
+                continue
             raise RuntimeError(f"Gemini HTTP {e.code}: {e.read().decode()[:300]}")
     if isinstance(data, list):
         data = data[0]
