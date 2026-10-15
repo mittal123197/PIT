@@ -226,6 +226,59 @@ def claude_spend() -> float:
         return 0.0
 
 
+# Gemini — Google's OpenAI-compatible endpoint. GEMINI_API_KEY in .env.
+# JSON mode is requested; if the endpoint rejects it, the call is retried
+# without it and the JSON object is pulled out of the reply.
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+
+
+def _gemini_chat(model: str, messages: list, temperature: float,
+                 json_mode: bool) -> str:
+    import urllib.error
+    import urllib.request
+
+    def _post(body):
+        req = urllib.request.Request(
+            _GEMINI_URL, data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {os.getenv('GEMINI_API_KEY', '')}",
+                     "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return json.loads(r.read().decode())
+
+    body = {"model": model, "messages": messages, "temperature": temperature}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    try:
+        data = _post(body)
+    except urllib.error.HTTPError as e:
+        if e.code == 400 and json_mode:
+            body.pop("response_format", None)
+            data = _post(body)
+        else:
+            raise RuntimeError(f"Gemini HTTP {e.code}: {e.read().decode()[:300]}")
+    if isinstance(data, list):
+        data = data[0]
+    if "error" in data:
+        raise RuntimeError(f"Gemini error: {data['error']}")
+    text = (data["choices"][0]["message"].get("content") or "").strip()
+    if json_mode and text and not text.startswith("{"):
+        i, j = text.find("{"), text.rfind("}")
+        if i != -1 and j > i:
+            text = text[i:j + 1]
+    return text
+
+
+def gemini_models() -> list[str]:
+    """Model ids this key can use (for picking one)."""
+    import urllib.request
+    req = urllib.request.Request(
+        "https://generativelanguage.googleapis.com/v1beta/openai/models",
+        headers={"Authorization": f"Bearer {os.getenv('GEMINI_API_KEY', '')}"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read().decode())
+    return sorted(m["id"].replace("models/", "") for m in data.get("data", []))
+
+
 def llm_chat(model: str, messages: list, temperature: float = 0.6,
              json_mode: bool = True) -> str:
     """Return the assistant message content. `openrouter:<model>` routes to
@@ -242,6 +295,8 @@ def llm_chat(model: str, messages: list, temperature: float = 0.6,
     if model.startswith("ollama:"):
         return _ollama_chat(model[len("ollama:"):], messages,
                             temperature, json_mode)
+    if model.startswith("gemini:"):
+        return _gemini_chat(model[len("gemini:"):], messages, temperature, json_mode)
     if model.startswith("anthropic:"):
         return _anthropic_chat(model[len("anthropic:"):], messages,
                                temperature, json_mode)
