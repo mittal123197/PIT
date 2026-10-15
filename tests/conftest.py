@@ -26,7 +26,15 @@ _TEST_DEFAULTS = {
     "PIT_STAKE_EVOLUTION": "1",
     "PIT_SPREAD_BPS": "0",
     "PIT_CHARTERS": "0",
-    "PIT_HISTORY": "0",      # no 60-day market download during tests     # no real LLM calls to write charters during tests   # exact-price assertions; the spread has its own test
+    "PIT_HISTORY": "0",      # no 60-day market download during tests
+    # no real model API calls from tests: empty keys win over .env (load_dotenv
+    # never overrides an existing variable), so agent decisions / reflections
+    # take their offline paths instead of waiting on the network
+    "GROQ_API_KEY": "",
+    "DEEPSEEK_API_KEY": "",
+    "OPENROUTER_API_KEY": "",
+    "ANTHROPIC_API_KEY": "",
+    "GEMINI_API_KEY": "",     # no real LLM calls to write charters during tests   # exact-price assertions; the spread has its own test
     # a developer's live .env (crypto / top100) must not leak into tests, or live ticks
     # try to build a real market brief over the network
     "PIT_MARKET": "us",

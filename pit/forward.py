@@ -912,7 +912,7 @@ def _reflect_winner(conn, round_id, wa, return_pct) -> str:
     trades = _own_trades(conn, round_id, wa["id"])
     cfg = json.loads(wa["strategy_config"])
     note = _self_reflection(cfg.get("notes", ""), trades, return_pct, won=True,
-                           model=cfg.get("model"))
+                           model=cfg.get("model"), has_charter=bool(cfg.get("charter")))
     cfg["notes"] = note
     if cfg.get("charter"):
         from .charter import revise_charter
@@ -936,7 +936,7 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
     trades = _own_trades(conn, round_id, la["id"])
     old_cfg = json.loads(la["strategy_config"])
     note = _self_reflection(old_cfg.get("notes", ""), trades, return_pct, won=False,
-                           model=old_cfg.get("model"))
+                           model=old_cfg.get("model"), has_charter=bool(old_cfg.get("charter")))
     # Preserve the model across generations — this was dropped for a long
     # time, silently falling back to decide()'s `model or DEFAULT_MODEL`
     # (Groq) for every agent that had ever lost even once, regardless of
@@ -988,7 +988,7 @@ def _share_lesson(conn, round_id, agent_id, note) -> None:
 
 
 def _self_reflection(old_notes, own_trades, return_pct, won: bool,
-                     model: str | None = None) -> str:
+                     model: str | None = None, has_charter: bool = False) -> str:
     """Learn from one's OWN trades (LLM if available, else a plain summary).
     Never looks at the opponent's trades — this is self-critique/reinforcement,
     not copying whoever won."""
@@ -997,6 +997,13 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool,
         # wasn't earned by trading — either a genuine all-cash hold, or a
         # decision loop that silently failed (LLM/network error) and never
         # got the chance to act. Either way, no false "what worked" note.
+        # With a charter, sitting in cash is usually deliberate (no setup met
+        # its conditions) — say that rather than "a data failure".
+        if has_charter:
+            return ((old_notes + " | " if old_notes else "") +
+                    "Held cash all round: no name met my charter's entry conditions. "
+                    "If that keeps happening, my setup may be too rare for these round "
+                    "lengths.")[-600:]
         if won:
             return ("Made zero trades this round — this win wasn't earned by "
                     "beating the rival's trading, it just avoided their loss. "
