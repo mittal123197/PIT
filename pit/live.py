@@ -559,9 +559,24 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
         # earlier than the audit entries that produced them (and overstated
         # every position's "held" time).
         ts = forward.local_ts()
+        charter_rejects = []
+        from . import charter as _ch
+        if brief and _ch.enforce_on() and cfg.get("charter_spec"):
+            kept = []
+            for o in orders:
+                why = (_ch.entry_check(cfg["charter_spec"], (brief.get("features") or {}).get(o["ticker"]))
+                       if o.get("side") == "buy" else None)
+                if why:
+                    charter_rejects.append(f"buy {o['ticker']}: rejected by your own charter — {why}")
+                else:
+                    kept.append(o)
+            orders = kept
+            if charter_rejects and verbose:
+                for msg in charter_rejects:
+                    print(f"  {name}: ✗ {msg}", flush=True)
         n = forward._execute(conn, rnd["id"], aid, st, orders, price, ts,
                              features=(brief or {}).get("features"))
-        _LAST_REJECTIONS[aid] = list(st.get("rejected_orders", []))
+        _LAST_REJECTIONS[aid] = charter_rejects + list(st.get("rejected_orders", []))
         cfg["notes"] = notes
         conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
                      (json.dumps(cfg), aid))

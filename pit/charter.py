@@ -186,6 +186,34 @@ def revise_charter(model: str | None, charter: str, own_trades: list, return_pct
     return {"charter": charter, "spec": spec or new_spec}
 
 
+def _losing(card: dict | None) -> bool:
+    c = (card or {}).get("train", card) or {}
+    return c.get("t") is not None and c["t"] <= -2
+
+
+def _remember_good(cfg: dict) -> None:
+    if cfg.get("charter") and cfg.get("charter_card") is not None and not _losing(cfg["charter_card"]):
+        cfg["charter_last_good"] = {"charter": cfg["charter"], "spec": cfg.get("charter_spec"),
+                                    "card": cfg["charter_card"]}
+
+
+def accept(cfg: dict, result: dict) -> bool:
+    """Apply a revised charter unless its backtest LOSES while the current one
+    doesn't (a rewrite must not swap a neutral charter for a losing one).
+    Returns True if the revision was taken."""
+    if not result.get("charter"):
+        return False
+    new_card = backtest(result.get("spec") or cfg.get("charter_spec"))
+    if _losing(new_card) and cfg.get("charter_card") is not None and not _losing(cfg["charter_card"]):
+        return False
+    cfg["charter"] = result["charter"]
+    if result.get("spec"):
+        cfg["charter_spec"] = result["spec"]
+    cfg["charter_card"] = new_card
+    _remember_good(cfg)
+    return True
+
+
 def apply(cfg: dict, result: dict) -> dict:
     """Store a charter + spec on an agent config and backtest the spec."""
     cfg["charter"] = result.get("charter") or cfg.get("charter", "")
@@ -223,8 +251,13 @@ def search(cfg: dict, model: str | None, iters: int | None = None,
         if verbose:
             print(f"[charter] {name} tried: {card_text(tried[-1]['card'])}", flush=True)
     best = max(tried, key=lambda v: _score(v["card"]))
+    # every version tried loses -> fall back to the last charter that didn't
+    good = cfg.get("charter_last_good")
+    if _losing(best["card"]) and good:
+        best = {"charter": good["charter"], "spec": good["spec"], "card": backtest(good["spec"])}
     cfg["charter"], cfg["charter_spec"], cfg["charter_card"] = (best["charter"], best["spec"],
                                                                best["card"])
+    _remember_good(cfg)
     return cfg
 
 
@@ -266,3 +299,28 @@ def ensure_charters(conn, arena: str, verbose: bool = True) -> None:
         if verbose:
             print(f"[charter] {n}: {cfg.get('charter')}\n           backtest: "
                   f"{card_text(cfg.get('charter_card'), cfg.get('charter_spec'))}", flush=True)
+
+
+
+def entry_check(spec: dict | None, feat: dict | None) -> str | None:
+    """None if a buy meets the charter's entry conditions on the current table
+    row, else a short reason naming the first condition that fails."""
+    if not spec or not spec.get("entry"):
+        return None
+    if not feat:
+        return "no data-table row for this name"
+    from .brief import RULE_FIELDS
+    ops = {"<": lambda a, b: a < b, "<=": lambda a, b: a <= b,
+           ">": lambda a, b: a > b, ">=": lambda a, b: a >= b}
+    for name, op, v in spec["entry"]:
+        x = feat.get(RULE_FIELDS.get(name, ""))
+        if x is None:
+            return f"{name} is not available, your charter needs {op} {v:g}"
+        if not ops[op](float(x), v):
+            return f"{name} is {float(x):.2f}, your charter needs {op} {v:g}"
+    return None
+
+
+def enforce_on() -> bool:
+    import os
+    return os.getenv("PIT_CHARTER_ENFORCE", "0") == "1"

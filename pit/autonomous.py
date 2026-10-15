@@ -285,6 +285,10 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "your_charter_record_this_round": view.get("your_charter_record_this_round"),
         "your_charter": view.get("charter", ""),
         "your_charter_backtest": view.get("charter_backtest", ""),
+        **({"charter_enforced": ("ON: any buy that doesn't meet your charter's entry "
+                                 "conditions in the current table is rejected by the arena; "
+                                 "sells are never restricted")}
+           if __import__("pit.charter", fromlist=["enforce_on"]).enforce_on() else {}),
         **({} if brief else {"charter_note": (
             "Your charter is written in the live data table's columns, which this "
             "mode doesn't provide — apply its spirit using what your research "

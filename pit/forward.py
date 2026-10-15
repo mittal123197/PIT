@@ -917,8 +917,8 @@ def _reflect_winner(conn, round_id, wa, return_pct) -> str:
     if cfg.get("charter"):
         from .charter import revise_charter
         n = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=?", (round_id,)).fetchone()[0]
-        from .charter import apply as _apply_charter
-        _apply_charter(cfg, revise_charter(cfg.get("model"), cfg["charter"], trades, return_pct, 1, n,
+        from .charter import accept as _accept_charter
+        _accept_charter(cfg, revise_charter(cfg.get("model"), cfg["charter"], trades, return_pct, 1, n,
                                            charter_record(conn, round_id, wa["id"], _quote_px),
                                            card=cfg.get("charter_card"), spec=cfg.get("charter_spec"),
                                            rivals=_rival_charters(conn, wa["lineage_id"])))
@@ -948,9 +948,11 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
         n = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=?", (round_id,)).fetchone()[0]
         better = conn.execute("SELECT COUNT(*) FROM round_states WHERE round_id=? "
                               "AND final_return_pct > ?", (round_id, return_pct)).fetchone()[0]
-        from .charter import apply as _apply_charter
-        new_cfg["charter_spec"] = old_cfg.get("charter_spec")
-        _apply_charter(new_cfg, revise_charter(old_cfg.get("model"), old_cfg["charter"], trades,
+        from .charter import accept as _accept_charter
+        for k in ("charter", "charter_spec", "charter_card", "charter_last_good"):
+            if k in old_cfg:
+                new_cfg[k] = old_cfg[k]
+        _accept_charter(new_cfg, revise_charter(old_cfg.get("model"), old_cfg["charter"], trades,
                                                return_pct, min(n, better + 1), n,
                                                charter_record(conn, round_id, la["id"], _quote_px),
                                                card=old_cfg.get("charter_card"),
