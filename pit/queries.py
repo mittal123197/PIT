@@ -305,7 +305,9 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
                   rs.final_return_pct, rs.status, rs.trade_count,
                   l.name, l.id AS lineage_id,
                   json_extract(a.strategy_config, '$.model') AS model,
-                  json_extract(a.strategy_config, '$.charter') AS charter
+                  json_extract(a.strategy_config, '$.charter') AS charter,
+                  json_extract(a.strategy_config, '$.charter_card') AS charter_card,
+                  json_extract(a.strategy_config, '$.charter_spec') AS charter_spec
            FROM round_states rs JOIN agents a ON a.id = rs.agent_id
            JOIN lineages l ON l.id = a.lineage_id WHERE rs.round_id=?""",
         (r["id"],)))
@@ -320,6 +322,13 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
     agents.sort(key=lambda x: x["ret"], reverse=True)
     for a in agents:   # "deepseek:deepseek-v4-flash" -> "deepseek-v4-flash"
         a["model_short"] = (a.get("model") or "").split(":", 1)[-1] if a.get("model") else ""
+        try:
+            from .charter import card_text
+            a["charter_bt"] = card_text(json.loads(a["charter_card"]) if a.get("charter_card") else None,
+                                        json.loads(a["charter_spec"]) if a.get("charter_spec") else None) \
+                if a.get("charter") else ""
+        except Exception:
+            a["charter_bt"] = ""
     # per-position live value + unrealized P&L from the last mark (no network)
     st_extra = {r["agent_id"]: r for r in _rows(conn.execute(
         "SELECT agent_id, cost_basis, mark_prices FROM round_states WHERE round_id=?",

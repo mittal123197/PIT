@@ -115,7 +115,8 @@
         <span class="muted">·</span> {{ a.trade_count }} trades</div>
       {% if a.charter %}<div title="this agent's own trading charter — the style it chose for itself; it may revise it after each round"
         style="margin-top:8px;font-size:11.5px;line-height:1.45;color:var(--ink-soft);border-left:2px solid {{ col }};padding-left:8px;">
-        <span class="mono" style="font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);">charter</span><br>{{ a.charter }}</div>{% endif %}
+        <span class="mono" style="font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);">charter</span><br>{{ a.charter }}
+        {% if a.charter_bt %}<div class="mono" style="margin-top:4px;font-size:10.5px;color:{{ 'var(--alpha)' if '→ edge' in a.charter_bt else 'var(--liq)' if '→ losing' in a.charter_bt else 'var(--ink-faint)' }};" title="the charter's checkable version replayed on ~60 days of real 5-minute market data, after trading costs">{{ a.charter_bt }}</div>{% endif %}</div>{% endif %}
       <div class="kpis">
         <div title="share of the account in stocks right now (the rest is cash)">
           <span class="kl">invested</span><b>{{ a.exposure_pct }}%</b>

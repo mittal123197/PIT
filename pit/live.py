@@ -502,6 +502,8 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
             "charter": cfg.get("charter", ""),
+            "charter_backtest": __import__("pit.charter", fromlist=["card_text"]).card_text(
+                cfg.get("charter_card"), cfg.get("charter_spec")) if cfg.get("charter") else "",
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid,
                                                        this_round_only=bool(replay._STATE)),
             "rival_returns": {forward._name(conn, a): round(r, 2)

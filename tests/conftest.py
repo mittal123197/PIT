@@ -25,7 +25,8 @@ _TEST_DEFAULTS = {
     "PIT_START_ROUND_DAYS": "7",
     "PIT_STAKE_EVOLUTION": "1",
     "PIT_SPREAD_BPS": "0",
-    "PIT_CHARTERS": "0",     # no real LLM calls to write charters during tests   # exact-price assertions; the spread has its own test
+    "PIT_CHARTERS": "0",
+    "PIT_HISTORY": "0",      # no 60-day market download during tests     # no real LLM calls to write charters during tests   # exact-price assertions; the spread has its own test
     # a developer's live .env (crypto / top100) must not leak into tests, or live ticks
     # try to build a real market brief over the network
     "PIT_MARKET": "us",

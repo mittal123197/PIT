@@ -703,9 +703,38 @@ def _duplicate_of(p: dict, active: list[dict], outcomes: list[dict],
     return None
 
 
+def research(spec: dict, practice: str, ledger_outcomes: list[dict]) -> dict:
+    """Evidence for a rule: 60 days of market history first (thousands of
+    snapshots, day-clustered t), the pool's own trades as a second check.
+    Falls back to the trades alone when there's no matching history (crypto,
+    or an exit rule on pos_pnl% / held_min)."""
+    ledger = backtest(spec, practice, ledger_outcomes)
+    hist = None
+    try:
+        from . import history
+        from .market import TRADE_UNIVERSE_MODE
+        if TRADE_UNIVERSE_MODE == "top100":
+            hist = history.research_rule(spec, practice)
+    except Exception:
+        hist = None
+    if not hist or hist["verdict"] == "untested":
+        return ledger
+    ev = dict(hist)
+    ev["ledger"] = {k: ledger.get(k) for k in ("verdict", "n_match", "n_other", "t",
+                                                "avg_match", "avg_other", "unit")}
+    return ev
+
+
 def evidence_label(ev: dict | None) -> str:
     if not ev:
         return "unverifiable (legacy free-text rule)"
+    if ev.get("source") == "history":
+        lg = ev.get("ledger") or {}
+        own = (f"; pool's own trades: {lg.get('verdict')} ({lg.get('n_match')} matching {lg.get('unit', 'buys')})"
+               if lg else "")
+        return (f"{ev['verdict']} — 60-day market research: {ev['n_match']:,} matching snapshots "
+                f"avg {ev['avg_match']:+.3f}% next 30m (win {ev['win_rate_match']}%) vs "
+                f"{ev['avg_other']:+.3f}% otherwise, t={ev['t']:+.2f} over {ev['days']} days" + own)
     if ev["verdict"] == "untested":
         return (f"untested — {ev['n_match']} matching / {ev['n_other']} other {ev.get('unit', 'buys')} "
                 f"across {ev.get('rounds', '?')} round(s); need {_min_trades()} each "
@@ -725,7 +754,7 @@ def review_rules(conn) -> list[dict]:
         if not g.get("spec"):
             continue
         spec = json.loads(g["spec"])
-        ev = backtest(spec, g["practice"], outcomes_for(conn, spec, cache))
+        ev = research(spec, g["practice"], outcomes_for(conn, spec, cache))
         conn.execute("UPDATE guidelines SET evidence=? WHERE id=?", (json.dumps(ev), g["id"]))
         if ev["verdict"] == "inconclusive" and g.get("tier") != "proven" \
                 and (ev.get("t") or 0) < _T_CONTRA:
@@ -896,7 +925,7 @@ def pool_constitution(conn, config: ArenaConfig, source_round_id: int | None) ->
         if p["kind"] == "add" and len(active_guidelines(conn)) >= config.max_active_guidelines:
             continue   # rulebook full — only removals can make room
         outcomes = outcomes_for(conn, p.get("spec"), ocache)
-        ledger = backtest(p["spec"], p["practice"], outcomes) if p.get("spec") else None
+        ledger = research(p["spec"], p["practice"], outcomes) if p.get("spec") else None
         pid = conn.execute(
             """INSERT INTO guideline_proposals
                (kind, practice, guideline_id, proposed_text, source_round_id,

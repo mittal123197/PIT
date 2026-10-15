@@ -118,7 +118,9 @@ is a plain record of the sells YOU chose this round: how many, how many were \
 profitable, what they netted, what holding those shares instead would be \
 worth now, and the trading costs you've paid.
 
-`your_charter` is the trading style YOU chose for yourself — trade by it. \
+`your_charter` is the trading style YOU chose for yourself — trade by it \
+(`your_charter_backtest` is how its checkable version did on ~60 days of real \
+market data). \
 When no name meets your charter, holding cash IS following it; that is a \
 legitimate decision, not a failure. Every buy must carry "charter_fit": the \
 charter conditions it meets, citing the table's numbers — or "deviation: <why>" \
@@ -282,6 +284,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "your_sell_record_this_round": view.get("your_sell_record_this_round"),
         "your_charter_record_this_round": view.get("your_charter_record_this_round"),
         "your_charter": view.get("charter", ""),
+        "your_charter_backtest": view.get("charter_backtest", ""),
         **({} if brief else {"charter_note": (
             "Your charter is written in the live data table's columns, which this "
             "mode doesn't provide — apply its spirit using what your research "
