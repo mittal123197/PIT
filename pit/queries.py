@@ -386,15 +386,9 @@ def live_view(conn: sqlite3.Connection) -> dict | None:
 
 
 def _max_drawdowns(conn, round_id: int) -> dict[int, float]:
-    """Worst peak-to-trough fall of each agent's account this round, in %."""
-    out: dict[int, tuple[float, float]] = {}
-    for r in conn.execute("SELECT agent_id, return_pct FROM round_marks "
-                          "WHERE round_id=? ORDER BY id", (round_id,)).fetchall():
-        eq = 1 + (r["return_pct"] or 0) / 100
-        peak, worst = out.get(r["agent_id"], (eq, 0.0))
-        peak = max(peak, eq)
-        out[r["agent_id"]] = (peak, min(worst, (eq / peak - 1) * 100))
-    return {k: round(v[1], 2) for k, v in out.items()}
+    """Worst peak-to-trough fall per agent, as a negative % for display."""
+    from .forward import max_drawdowns
+    return {k: -v for k, v in max_drawdowns(conn, round_id).items()}
 
 
 def _json(v) -> dict:
@@ -782,10 +776,6 @@ def audit_log(conn: sqlite3.Connection, round_id: int, limit: int = 300) -> list
     return rows
 
 
-def has_audit_log(conn: sqlite3.Connection, round_id: int) -> bool:
-    return bool(conn.execute(
-        "SELECT 1 FROM agent_audit WHERE round_id=? LIMIT 1", (round_id,)
-    ).fetchone())
 
 
 def guidelines_overview(conn: sqlite3.Connection) -> dict:

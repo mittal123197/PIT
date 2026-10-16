@@ -169,3 +169,20 @@ def test_short_rounds_move_ratings_less_than_full_sessions(monkeypatch):
             "SELECT rating_delta FROM round_rankings WHERE round_id=? AND rank=1",
             (rnd["id"],)).fetchone()[0]
     assert abs(gains[30] / gains[390] - (30 / 390) ** 0.5) < 0.02
+
+
+def test_drawdown_tiebreak_uses_peak_to_trough_from_marks(monkeypatch):
+    """Two agents tied on return: the one whose account fell further from its
+    peak during the round ranks lower."""
+    conn = _fresh_conn()
+    config = ArenaConfig()
+    rnd, ids = _three_way_round(conn, config, {"RONIN": 1.0, "VIPER": 1.0, "LYNX": -3.0})
+    for aid, path in ((ids["RONIN"], [0, 2.0, 1.0]), (ids["VIPER"], [0, 0.5, 1.0])):
+        for r in path:
+            conn.execute("INSERT INTO round_marks (round_id, agent_id, ts, return_pct) "
+                         "VALUES (?,?,?,?)", (rnd["id"], aid, "t", r))
+    conn.commit()
+    dd = forward.max_drawdowns(conn, rnd["id"])
+    assert dd[ids["RONIN"]] > 0.9 and dd[ids["VIPER"]] == 0
+    out = forward._resolve(conn, rnd, config, lambda t: 100.0)
+    assert [r["name"] for r in out["ranking"]][:2] == ["VIPER", "RONIN"]

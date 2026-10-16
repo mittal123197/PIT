@@ -26,10 +26,6 @@ _STATE: dict = {}
 INDEXES = ("SPY", "QQQ")
 
 
-def available_days() -> list[date]:
-    from . import history
-    df = history.panel()
-    return sorted(df["day"].unique()) if df is not None else []
 
 
 def start(day: date | None = None, compress_minutes: int | None = None) -> None:

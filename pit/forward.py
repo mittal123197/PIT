@@ -419,15 +419,20 @@ def _liquidate(conn, round_id, agent_id, st, price, date, reason="stop-loss"):
                  (cash, status, date, round_id, agent_id))
 
 
-def _update_drawdown(conn, round_id, agent_id, ret_pct):
-    row = conn.execute("SELECT max_drawdown_pct FROM round_states "
-                       "WHERE round_id=? AND agent_id=?", (round_id, agent_id)).fetchone()
-    dd = max(row["max_drawdown_pct"], -ret_pct if ret_pct < 0 else 0.0)
-    conn.execute("UPDATE round_states SET max_drawdown_pct=? "
-                 "WHERE round_id=? AND agent_id=?", (dd, round_id, agent_id))
+def max_drawdowns(conn, round_id: int) -> dict[int, float]:
+    """Worst peak-to-trough fall (%, positive) of each agent's account this
+    round, from its marked return series. Feeds the ranking's tie-break
+    (lower drawdown wins) — the stored max_drawdown_pct was never updated,
+    so that tie-break silently compared zeros."""
+    out: dict[int, tuple[float, float]] = {}
+    for r in conn.execute("SELECT agent_id, return_pct FROM round_marks "
+                          "WHERE round_id=? ORDER BY id", (round_id,)).fetchall():
+        eq = 1 + (r["return_pct"] or 0) / 100
+        peak, worst = out.get(r["agent_id"], (eq, 0.0))
+        peak = max(peak, eq)
+        out[r["agent_id"]] = (peak, max(worst, (1 - eq / peak) * 100))
+    return {k: round(v[1], 3) for k, v in out.items()}
 
-
-# ---- resolution -------------------------------------------------------
 
 def _rank_participants(summaries: list, eps: float) -> list[int]:
     """Full ranking, best to worst, no ties possible — same cascade as the
@@ -451,6 +456,7 @@ def _resolve(conn, rnd, config, price) -> dict:
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
     summaries = {}
+    drawdowns = max_drawdowns(conn, rnd["id"])
     for aid, st in states.items():
         # Force-close every open position for real at the deadline — a
         # final_return_pct built on a PAPER mark of positions nobody actually
@@ -468,8 +474,10 @@ def _resolve(conn, rnd, config, price) -> dict:
         ret = (total / st["starting_capital"] - 1) * 100
         conn.execute("UPDATE round_states SET final_return_pct=? "
                      "WHERE round_id=? AND agent_id=?", (ret, rnd["id"], aid))
-        summaries[aid] = AgentSummary(aid, ret, st["trade_count"],
-                                      st["max_drawdown_pct"],
+        dd = max(drawdowns.get(aid, 0.0), -ret if ret < 0 else 0.0)
+        conn.execute("UPDATE round_states SET max_drawdown_pct=? WHERE round_id=? AND agent_id=?",
+                     (dd, rnd["id"], aid))
+        summaries[aid] = AgentSummary(aid, ret, st["trade_count"], dd,
                                       st["status"] in ("liquidated", "goal_hit"))
 
     ranking = _rank_participants(list(summaries.values()), config.tie_epsilon_pct)
@@ -605,9 +613,6 @@ def is_forced(reason: str | None) -> bool:
     return r in FORCED_REASONS or r.startswith("position stop")
 
 
-def _agent_ts(ts):
-    from .replay import agent_ts
-    return agent_ts(ts)
 
 
 def sell_record(conn, round_id, agent_id, price) -> dict:
