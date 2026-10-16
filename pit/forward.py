@@ -799,7 +799,7 @@ def _reflect_loser(conn, round_id, la, carried_rating, return_pct) -> str:
 
 def _share_lesson(conn, round_id, agent_id, note) -> None:
     """Post a self-reflection note as a message the RIVAL will actually see
-    on its next decision (via _recent_messages) — this is the "communication"
+    on its next decision (via _rival_lessons) — this is the "communication"
     the pool draws its shared guidelines from: agents don't just silently
     self-improve, they broadcast what they learned.
 
@@ -881,49 +881,31 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool,
 
 
 
-def _recent_messages(conn, round_id, agent_id, limit=4,
-                     this_round_only: bool = False) -> list[str]:
-    """ALL OTHER PARTICIPANTS' recent messages this round (not this agent's
-    own), oldest-first: this round's banter/lessons, plus each rival's most
-    recent lesson from any round if it isn't already in that window.
+def _rival_lessons(conn, round_id, agent_id, replay: bool = False) -> list[str]:
+    """Each rival's most recent self-reflection lesson (stock names hidden).
+    Rivals' in-round taunts are NOT shown to agents — they're for the
+    spectators (dashboard) only, so no agent trades off another's banter.
+    None in a replay: a lesson from an earlier round may know how the day ends.
 
-    round_states is the real roster for a round (works for 2 or N agents) —
-    NOT rounds.agent_a_id/agent_b_id, which only ever holds two lineages and
-    would silently drop rivals in a 3+-way battle. Lessons are posted at
-    round-resolution time (see _share_lesson), scoped to the round that just
-    ENDED — without the fallback, the very next round would never surface
-    the self-reflection a rival just shared."""
-    rivals = conn.execute(
-        "SELECT a.id, a.lineage_id FROM round_states rs "
+    round_states is the real roster for a round (works for 2 or N agents).
+    Lessons are posted at resolution, scoped to the round that just ENDED, so
+    they're looked up by lineage across rounds."""
+    if replay:
+        return []
+    rows = conn.execute(
+        "SELECT DISTINCT a.lineage_id FROM round_states rs "
         "JOIN agents a ON a.id = rs.agent_id "
         "WHERE rs.round_id=? AND rs.agent_id!=?", (round_id, agent_id)).fetchall()
-    if not rivals:
-        return []
-    rival_ids = [r["id"] for r in rivals]
-    rival_lineages = {r["lineage_id"] for r in rivals}
-    placeholders = ",".join("?" * len(rival_ids))
-    rows = conn.execute(
-        f"SELECT m.message, m.kind, l.name FROM agent_messages m "
-        f"JOIN agents a ON a.id=m.agent_id JOIN lineages l ON l.id=a.lineage_id "
-        f"WHERE m.round_id=? AND m.agent_id IN ({placeholders}) "
-        f"ORDER BY m.id DESC LIMIT ?",
-        (round_id, *rival_ids, limit)).fetchall()
-    # stock names are hidden in every rival message — taunts ("watch META
-    # run") leaked picks just as lessons did, now that holdings are private
-    msgs = [f"{r['name']}: {_redact_tickers(r['message'])}" for r in reversed(rows)]
-    if this_round_only:   # replay: lessons from earlier rounds may know how the day ends
-        return msgs
-    for lineage_id in rival_lineages:
-        last_lesson = conn.execute(
+    out = []
+    for r in rows:
+        last = conn.execute(
             "SELECT m.message, l.name FROM agent_messages m "
             "JOIN agents a ON a.id=m.agent_id JOIN lineages l ON l.id=a.lineage_id "
             "WHERE a.lineage_id=? AND m.kind='lesson' ORDER BY m.id DESC LIMIT 1",
-            (lineage_id,)).fetchone()
-        if last_lesson:
-            tag = f"{last_lesson['name']}: {_redact_tickers(last_lesson['message'])}"
-            if tag not in msgs:
-                msgs.append(tag)
-    return msgs
+            (r["lineage_id"],)).fetchone()
+        if last:
+            out.append(f"{last['name']}: {_redact_tickers(last['message'])}")
+    return out
 
 
 def _redact_tickers(text: str) -> str:

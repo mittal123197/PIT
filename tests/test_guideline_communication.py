@@ -88,7 +88,7 @@ def test_self_reflection_note_is_shared_as_a_lesson_message(monkeypatch):
 
 def test_rival_sees_last_round_lesson_at_the_start_of_the_next_round(monkeypatch):
     """Lessons are posted scoped to the round that just ENDED. Without the
-    cross-round fallback in _recent_messages, the very next round would never
+    cross-round lookup in _rival_lessons, the very next round would never
     surface them to the rival."""
     monkeypatch.setattr("pit.llm.groq_available", lambda: False)
     conn = _fresh_conn()
@@ -113,7 +113,7 @@ def test_rival_sees_last_round_lesson_at_the_start_of_the_next_round(monkeypatch
     new_rid = forward.start_round(conn, config, days=7)
     new_viper_id = conn.execute(
         "SELECT current_agent_id FROM lineages WHERE name='VIPER'").fetchone()["current_agent_id"]
-    seen = forward._recent_messages(conn, new_rid, new_viper_id)
+    seen = forward._rival_lessons(conn, new_rid, new_viper_id)
     assert any("Lesson from this round" in m for m in seen)
     assert any("RONIN" in m for m in seen)
 
@@ -123,3 +123,14 @@ def test_rival_sees_last_round_lesson_at_the_start_of_the_next_round(monkeypatch
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_rivals_never_see_taunts():
+    conn = _fresh_conn()
+    rid = forward.start_round(conn, ArenaConfig(), days=7)
+    ids = [r["agent_id"] for r in conn.execute(
+        "SELECT agent_id FROM round_states WHERE round_id=?", (rid,))]
+    conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, message) "
+                 "VALUES (?,?,?,?)", (rid, ids[0], forward.local_ts(), "PLTR to the moon"))
+    conn.commit()
+    assert not any("moon" in m for m in forward._rival_lessons(conn, rid, ids[1]))

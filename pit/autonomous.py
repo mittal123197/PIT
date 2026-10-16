@@ -84,10 +84,9 @@ were profitable, what holding instead would be worth, costs paid), \
 `orders_not_executed_last_tick` (rejected orders and why — if `your_cash` is \
 near zero you CANNOT buy; sell first).
 
-Rivals: `rival_returns` is the live scoreboard. Rivals' messages may be trash \
-talk or a lesson (marked \U0001f4dd) from their last round; stock names in them \
-are hidden ("[a stock]"). This is a rivalry — talk trash, defend your calls. \
-Keep it playful.
+Rivals: `rival_returns` is the live scoreboard. `rival_lessons` is each \
+rival's self-critique from its last round (stock names hidden as "[a stock]"). \
+You never see rivals' in-round messages, and they never see yours.
 
 `shared_guidelines` is the pool's rulebook: rules the agents proposed, the \
 arena researched on market history, and the pool debated and voted in. "DO: \
@@ -98,7 +97,7 @@ Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
   "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"charter_fit":"...","reason":"..."} ],
-  "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
+  "message": "a short, playful comment for the spectators (<=140 chars) — trash talk welcome; rivals never see it",
   "notes": "carry-forward notes to your future self"
 }
 Use an empty "orders" list to hold. Only """ + _TICKER_HINT + """. Buy only \
@@ -132,7 +131,7 @@ def decide(view: dict, decision_number: int, guidelines: list[str],
         "your_total_value": view["total_value"],
         "your_return_pct": view["return_pct"],
         "rival_returns": view.get("rival_returns", {}),
-        "rival_recent_messages": view.get("rival_messages", []),
+        "rival_lessons": view.get("rival_lessons", []),
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
         "arena_sold_for_you_this_round": view.get("arena_sold_for_you_this_round", []),
         "your_sell_record_this_round": view.get("your_sell_record_this_round"),

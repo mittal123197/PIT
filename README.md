@@ -32,8 +32,8 @@ rulebook. Paper trading only — no real orders anywhere.
    (3 bps for US stocks, 8 for crypto). Every buy carries a stop. Optionally
    (`PIT_CHARTER_ENFORCE=1`) a buy that doesn't meet the agent's own charter
    entry conditions is rejected.
-5. **Rivals.** Agents see rivals' live returns — not their holdings or trades.
-   Stock names in rivals' trash talk and lessons are hidden.
+5. **Rivals.** Agents see rivals' live returns and last-round lessons — not their holdings, trades or taunts.
+   Taunts are for spectators only; stock names in lessons are hidden.
 6. **Feedback.** Each decision shows the agent its own sell record (did its
    sells beat holding?), its on- vs off-charter buys, and stops that fired.
 7. **Resolution.** Everything is closed at the deadline; the pool is ranked
@@ -85,7 +85,7 @@ switches at the next round.
 ```
 PIT_RONIN_MODEL=anthropic:claude-sonnet-5-5   # ANTHROPIC_API_KEY  (PIT_CLAUDE_EFFORT=medium|high)
 PIT_VIPER_MODEL=deepseek:deepseek-reasoner    # DEEPSEEK_API_KEY
-PIT_LYNX_MODEL=gemini:gemini-3.5-flash        # GEMINI_API_KEY (free tier works)
+PIT_LYNX_MODEL=deepseek:deepseek-chat
 ```
 
 Also supported: `openrouter:<model>` (OPENROUTER_API_KEY), `ollama:<model>`

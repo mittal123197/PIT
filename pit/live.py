@@ -302,7 +302,7 @@ def _clear_memory_for_replay(conn, rnd, verbose) -> None:
     in is hindsight: all three agents piled into PLTR on turn one, citing
     exactly those notes and their rivals' lessons. Each replay starts with a
     clean memory (rival lessons from earlier rounds are hidden too, see
-    forward._recent_messages); notes written DURING the replay still carry
+    forward._rival_lessons); notes written DURING the replay still carry
     from one wake-up to the next."""
     for r in conn.execute("SELECT agent_id FROM round_states WHERE round_id=?",
                           (rnd["id"],)).fetchall():
@@ -478,8 +478,8 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
             "charter_enforced": __import__("pit.charter", fromlist=["enforced"]).enforced(cfg),
             "charter_backtest": __import__("pit.charter", fromlist=["card_text"]).card_text(
                 cfg.get("charter_card"), cfg.get("charter_spec")) if cfg.get("charter") else "",
-            "rival_messages": forward._recent_messages(conn, rnd["id"], aid,
-                                                       this_round_only=bool(replay._STATE)),
+            "rival_lessons": forward._rival_lessons(conn, rnd["id"], aid,
+                                                    replay=bool(replay._STATE)),
             "rival_returns": {forward._name(conn, a): round(r, 2)
                               for a, r in returns.items() if a != aid},
             "orders_not_executed_last_tick": _LAST_REJECTIONS.get(aid, []),
@@ -489,8 +489,8 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
         }
         jobs.append({"aid": aid, "st": st, "name": name, "cfg": cfg, "view": view})
 
-    # Every agent decides from the SAME pre-tick snapshot (same messages,
-    # same prices, same rival holdings). Previously agents decided one after
+    # Every agent decides from the SAME pre-tick snapshot (same prices,
+    # same rival returns). Previously agents decided one after
     # another and each one's trash talk was committed before the next agent
     # read messages, so whoever went last saw more than whoever went first
     # — contradicting "everyone trades the same round at the same time".
@@ -558,12 +558,10 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
         if message:
             # local wall-clock ts (matches trades/fills), not forward._now()'s
             # UTC ISO — see _persist_audit for why mixing the two is a bug.
-            # Stock names are redacted when STORED: rivals can't see each
-            # other's holdings, and a taunt ("PLTR riding momentum") would
-            # announce them — the page shows exactly what the agents see.
+            # Taunts are for the spectators only (agents never read rivals'
+            # taunts), so they're stored as written, tickers included.
             conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "
-                         "message) VALUES (?,?,?,?)",
-                         (rnd["id"], aid, ts, forward._redact_tickers(message)))
+                         "message) VALUES (?,?,?,?)", (rnd["id"], aid, ts, message))
         conn.commit()
         if verbose:
             arrow = "▲" if returns[aid] >= 0 else "▼"
