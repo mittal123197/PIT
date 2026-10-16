@@ -126,8 +126,15 @@ def _symbol_panel(sym: str, intra: pd.DataFrame, daily_close: pd.Series,
     return out
 
 
+INDEXES = ("SPY", "QQQ")      # in the panel for replays' market line / benchmark only
+
+
+def _tradeable(df: pd.DataFrame) -> pd.DataFrame:
+    return df[~df["sym"].isin(INDEXES)]
+
+
 def build_panel(mode: str = "top100", verbose: bool = True) -> pd.DataFrame | None:
-    symbols = brief.symbols_for(mode)
+    symbols = brief.symbols_for(mode) + list(INDEXES)
     t = time.time()
     intra = _download(symbols, period="60d", interval="5m")
     daily = _download(symbols, period="2y", interval="1d")
@@ -170,7 +177,7 @@ def panel(mode: str = "top100", verbose: bool = True) -> pd.DataFrame | None:
     today = time.strftime("%Y-%m-%d")
     if _PANEL["day"] == today and _PANEL["df"] is not None:
         return _PANEL["df"]
-    path = _DIR / f"panel_v2_{mode}_{today}.pkl"
+    path = _DIR / f"panel_v3_{mode}_{today}.pkl"
     df = None
     if path.exists():
         try:
@@ -225,6 +232,7 @@ def research_rule(spec: dict, practice: str, df: pd.DataFrame | None = None) -> 
     df = panel() if df is None else df
     if df is None:
         return None
+    df = _tradeable(df)
     sample = df[(df["bar"] % 6 == 0) & df["f30"].notna()]          # non-overlapping 30-min steps
     m = _mask(sample, spec["when"])
     if m is None:
@@ -275,6 +283,7 @@ def backtest_charter(spec: dict, df: pd.DataFrame | None = None) -> dict | None:
     df = panel() if df is None else df
     if df is None or not spec or not spec.get("entry"):
         return None
+    df = _tradeable(df)
     entry = _mask(df, spec["entry"])
     if entry is None:
         return None

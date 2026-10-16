@@ -21,15 +21,6 @@ def _trade(conn, rid, aid, side, sym, reason):
 
 
 
-def test_scan_is_an_unranked_alphabetical_sample(monkeypatch):
-    monkeypatch.setattr(market, "_movers_download", lambda *a, **k: object())
-    monkeypatch.setattr(market, "_extract_closes", lambda df, ts: {t: (10.0 + i, 10.0) for i, t in enumerate(sorted(ts, reverse=True))})
-    monkeypatch.setattr("pit.full_market.random_sample", lambda n, seed=None, mode="full": ["ZZZ", "AAA", "MMM"])
-    monkeypatch.setattr("pit.full_market.sector_map", lambda mode="full": {"AAA": ("a", "Tech")})
-    monkeypatch.setattr("pit.full_market.universe_size", lambda mode="full": 3)
-    r = market.scan_full_market(n=3)
-    assert "gainers" not in r and "losers" not in r
-    assert [x["ticker"] for x in r["sample"]] == ["AAA", "MMM", "ZZZ"]   # alphabetical, not by change_pct
 
 
 def test_rival_lessons_pass_on_the_principle_not_the_ticker(monkeypatch):

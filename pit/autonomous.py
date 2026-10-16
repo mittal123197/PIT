@@ -1,280 +1,137 @@
-"""The autonomous research trader — an LLM given capital and a goal, nothing else.
+"""One agent decision: an LLM, its book, its charter, the shared data table.
 
-No universe, no strategy config. Each decision it may research the price history
-of any ticker it names and then trade.
-Its only hard limit is the stop-loss. It's the software equivalent of handing a
-person some money and a week: they look around, form a view, and act.
-
-Needs Groq. A bounded loop keeps the API cost sane: it researches for a few
-turns, then must commit orders.
+Every wake-up the agent receives ONE market brief — the same table for every
+agent (intraday + daily technicals + fundamentals for the whole universe, rows
+in random order) — plus its own book, records and rivals' scores, and returns
+one decision: orders (or none), a taunt, and notes to its future self. There
+are no research tools or multi-turn loops: live trading and replays feed the
+same table (pit/brief.py live, pit/replay.py from the market history).
 """
 from __future__ import annotations
 
 import json
 import os
+import random
 import time
 
-from . import market
-from .config import DEFAULT, MARKET
+from .config import MARKET
 from .llm import AGENT_AWARE, DEFAULT_MODEL, _is_retryable, llm_available, llm_chat
 
-MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "1"))
+_TICKER_HINT = ("tickers from the table (US-listed stocks)" if MARKET == "us" else
+                "tickers from the table, in TICKER-USD form (e.g. BTC-USD)")
 
-_MARKET_NAME = ("US stock" if MARKET == "us" else
-               "crypto" if MARKET == "crypto" else "Indian (NSE)")
-_TICKER_HINT = ("valid US-listed tickers" if MARKET == "us" else
-               "valid crypto tickers in TICKER-USD form (e.g. BTC-USD)" if MARKET == "crypto"
-               else "valid NSE tickers using the .NS suffix")
-_SCAN_UNIVERSE_HINT = ("the ENTIRE US-listed market (thousands of real tickers, not a shortlist)"
-                      if MARKET == "us" else
-                      "the major liquid crypto pairs (dozens of real coins, not a shortlist)"
-                      if MARKET == "crypto" else
-                      "the NSE market")
-
-_SYSTEM = f"""You are one of several autonomous traders in a pool, all trading \
-the SAME round at the SAME time — not a 1-on-1 duel. Everyone started the round \
-with the SAME paper capital and has the same fixed number of trading days. At \
-the deadline everyone is ranked by return, highest first, and there are no ties. \
-Only 1st place truly wins; everyone else is a loser (worse the lower you rank), \
-though dead last is punished more than someone who narrowly missed 1st.
+SYSTEM = """You are one of several autonomous traders in a pool, all trading \
+the SAME round at the SAME time with the SAME paper capital and the same \
+deadline. At the deadline everyone is ranked by return, highest first — no \
+ties. Only 1st place truly wins.
 
 This is a BATTLE. Your single objective is the highest return in the pool by \
-the deadline — generate maximum profit and beat your rivals. Losing agents are \
-retired and recreated from their own post-round self-critique; the winner keeps \
-going. Nobody hands you ideas and nobody is coming to help: your edge is your \
-own judgment. You can see how each rival is doing (their live return) but not \
-what they hold or trade — your picks have to be your own.
-
-You have NO watchlist, NO tips, and NO pre-picked list from us. You have three \
-real research tools — use whichever combination you actually need, in any order, \
-before you commit:
-
-1. SCAN — shows a RANDOM slice of {_SCAN_UNIVERSE_HINT}: ~20 names with sector, \
-   price and today's move, listed alphabetically. It is NOT a ranking and NOT a \
-   recommendation, and a different slice comes back every call. It is just one \
-   source of ideas — you are free to trade ANY ticker in the universe below, \
-   chosen on your own thesis. Invoke with: "research": {{"scan": true}}
-2. HISTORY — recent daily closes for any ticker YOU name (technicals: trend, \
-   support/resistance, momentum). Invoke with:
-   "research": {{"history": ["TICKER", ...]}}  (up to 8 at once)
-3. FUNDAMENTALS — sector, P/E (trailing + forward), profit margin, revenue \
-   growth, earnings growth, ROE, debt-to-equity, analyst target price and \
-   rating, for any ticker YOU name. Use it to judge whether a mover is a real \
-   business or just noise, or to check if something is actually cheap/expensive. \
-   Invoke with: "research": {{"fundamentals": ["TICKER", ...]}}  (up to 5 at once)
-
-You can combine all three in one research request, e.g.
-{{"scan": true, "history": ["XYZ"], "fundamentals": ["XYZ"]}}. Use them to find \
-real opportunities instead of just naming famous stocks from memory. Your edge \
-comes from what you find and how you reason about it, not from reciting \
-well-known names.
-
-How you trade is entirely your call: how many positions, how big, how long you \
-hold, whether you trade often or rarely, concentrate or spread out. Nothing \
-here is a strategy hint — the only rules are the hard ones below.
-
-Order mechanics: buys and sells execute immediately at the current price when \
-you decide. EVERY buy automatically carries a stop-loss: if that position later \
-falls a set % below your average entry it is sold for you, even while you \
-sleep. The default distance is sized to each asset's own volatility over this \
-round's length (about 2x its typical move; shown as the autoStop% column when \
-you have a data table, and on each of your positions as stop_pct); \
-you may set your own per buy with "stop_loss_pct" (0.5–20) — tighter or looser \
-is your call. There are no limit or take-profit orders, and nothing else \
-persists between wake-ups. Each of your positions shows its entry, its \
-stop distance, pos_pnl (its P&L % vs your entry) and held_min (minutes held).
-
-Hard rules, both enforced automatically (you don't have to act on them, but \
-you can't stop them): (1) a PORTFOLIO stop-loss liquidates your entire book if \
-its aggregate return falls to `arena_risk.portfolio_stop_pct`, and a book \
-that reaches `arena_risk.take_profit_pct` is closed and its gain locked in \
-(both sized from this round's length and market volatility). (2) each position's own stop-loss (above) force-sells \
-that holding on its own the moment IT ALONE falls its stop % below what you \
-paid — independent of how the rest of your book is doing. Manage risk accordingly: \
-don't count on averaging down a loser before it hits its own stop.
-Goal: maximise return, avoid losses.
+the deadline. Nobody hands you ideas: your edge is your own judgment. You can \
+see how each rival is doing (their live return) but not what they hold or \
+trade — your picks have to be your own.
 """ + ("""
-Stakes: if you don't finish 1st this round your stake shrinks and you carry \
-forward into a new attempt built from YOUR OWN self-critique — study your own \
-mistakes, don't just retire quietly. Finish 1st and your stake grows and you \
-reinforce whatever worked. Finishing dead last costs more than finishing \
-narrowly out of 1st. Play to win.
+Stakes: if you don't finish 1st, this version of you is retired and your next \
+generation is rebuilt from YOUR OWN post-round self-critique. Finish 1st and \
+you keep going and reinforce what worked. Play to win.
 """ if AGENT_AWARE else "") + """
-You can see your rivals' recent messages — some are trash talk, some (marked \
-\U0001f4dd) are a rival sharing a genuine lesson it drew from its own last \
-round. Stock names in rivals' messages are hidden ("[a stock]"): you get their \
-attitude and their lessons, not their picks. This is a rivalry — talk trash, \
-defend your calls, get in their heads. Keep it playful but competitive.
+YOUR DATA: every wake-up you receive ONE complete data table for your whole \
+tradeable universe (as MARKET BRIEF, after these instructions): per name its \
+sector and price; TODAY's session so far — open% (change since today's open), \
+vsVWAP% (price vs today's volume-weighted average price), 15m% / 30m% (change \
+over the last 15 / 30 minutes), dayRange% (0 = at today's low, 100 = at the \
+high), volPace (today's volume vs a normal day at this hour); the daily view — \
+1d/5d/20d%, price vs its 20- and 50-day moving average, RSI14, position in its \
+52-week range, vol-x, dayVol% (typical daily move), autoStop% (your default \
+stop for that name this round); and fundamentals — forward P/E, margin, \
+revenue and earnings growth, ROE, debt/equity, analyst rating and target \
+upside. A MARKET NOW line gives SPY/QQQ since the open and market breadth. \
+"." means not available (some intraday columns right after the open). Rows \
+are in RANDOM order. Everyone sees the same table. You make ONE decision per \
+wake-up, then sleep until the next (several minutes).
 
-`orders_not_executed_last_tick` lists any of your orders that were rejected \
-last decision and why (e.g. no cash left). If `your_cash` is near zero you \
-CANNOT buy — sell something first to free cash, and don't resubmit the same \
-unaffordable order.
+How you trade is your call: how many positions, how big, how long you hold, \
+how often you trade. Nothing here is a strategy hint — the only rules are the \
+hard ones below and your own charter.
 
-Every fill pays half the bid/ask spread (buys a little above the quote, \
-sells a little below), as with a real broker. `your_sell_record_this_round` \
-is a plain record of the sells YOU chose this round: how many, how many were \
-profitable, what they netted, what holding those shares instead would be \
-worth now, and the trading costs you've paid.
+Order mechanics: orders execute immediately at the current price, and every \
+fill pays half the bid/ask spread (buys a little above the quote, sells a \
+little below), as with a real broker. EVERY buy carries a stop-loss: if that \
+position later falls its stop % below your average entry, the arena sells it \
+for you, even between wake-ups. The default stop is that name's autoStop% \
+(about 2x its typical move over this round); set your own per buy with \
+"stop_loss_pct" (0.5–20). No limit or take-profit orders. Each position shows \
+its entry, stop, pos_pnl (P&L % vs entry) and held_min (minutes held).
+
+Hard rules the arena enforces: (1) a PORTFOLIO stop liquidates your whole book \
+if its return falls to `arena_risk.portfolio_stop_pct`, and a book reaching \
+`arena_risk.take_profit_pct` is closed with the gain locked in (both sized \
+from this round's length and market volatility); (2) each position's own stop \
+(above) sells that holding alone. Don't count on averaging down a loser.
 
 `your_charter` is the trading style YOU chose for yourself — trade by it \
 (`your_charter_backtest` is how its checkable version did on ~60 days of real \
-market data). \
-When no name meets your charter, holding cash IS following it; that is a \
-legitimate decision, not a failure. Every buy must carry "charter_fit": the \
+market data). When no name meets your charter, holding cash IS following it — \
+a legitimate decision, not a failure. Every buy must carry "charter_fit": the \
 charter conditions it meets, citing the table's numbers — or "deviation: <why>" \
-if you knowingly break it. Deviations are marked in the public trade log and \
-in your own post-round review; `your_charter_record_this_round` shows your \
-on-charter vs off-charter buys this round and what each group has made. You can change the charter after the round, \
-not mid-round.
+if you knowingly break it (and `charter_enforced`, when present, means the \
+arena rejects buys that don't meet your charter's entry conditions). \
+`your_charter_record_this_round` shows your on- vs off-charter buys and what \
+each made. You can change the charter after the round, not mid-round.
 
-`arena_sold_for_you_this_round` lists positions the arena sold for you \
-(a stop-loss that fired while you slept) — when, which ticker, at what price.
+Your own records: `your_sell_record_this_round` (sells you chose, how many \
+were profitable, what holding instead would be worth, costs paid), \
+`arena_sold_for_you_this_round` (stops that fired), \
+`orders_not_executed_last_tick` (rejected orders and why — if `your_cash` is \
+near zero you CANNOT buy; sell first).
 
-`rival_returns` is every rival's current return % this round — the live \
-scoreboard you are fighting.
+Rivals: `rival_returns` is the live scoreboard. Rivals' messages may be trash \
+talk or a lesson (marked \U0001f4dd) from their last round; stock names in them \
+are hidden ("[a stock]"). This is a rivalry — talk trash, defend your calls. \
+Keep it playful.
 
-`shared_guidelines` in your context is the pool's constitution — rules the \
-agents themselves proposed after past rounds and the pool voted in by \
-majority, not rules from us. Each is labeled "DO: ..." (a good practice worth \
-following) or "AVOID: ..." (a bad practice the pool agreed to stop). \
-Check it before you commit — you have full access to it every single \
-decision, it costs nothing to consult.
+`shared_guidelines` is the pool's rulebook: rules the agents proposed, the \
+arena researched on market history, and the pool debated and voted in. "DO: \
+..." is a practice worth following, "AVOID: ..." one to stop; each shows its \
+evidence.
 
 Respond ONLY with JSON of this shape:
 {
   "thoughts": "brief reasoning",
-  "research": { "scan": true, "history": ["TICKER", ...], "fundamentals": ["TICKER", ...] },
   "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"charter_fit":"...","reason":"..."} ],
   "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
-  "done": true|false,
   "notes": "carry-forward notes to your future self"
 }
-Set done=false and fill "research" to gather data first (you'll be called again \
-with the results). Set done=true with your "orders" (and a "message") to act. \
-Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what you hold. \
-Amounts are in your account currency. You may also give "qty" (shares, fractional OK) \
-instead of amount. Fractional shares are allowed, so you can buy a stock \
-priced above your cash by sizing the amount to what you can afford."""
-
-
-_BRIEF_TOOLS = """You have NO research tools to call and no web to browse. Instead, every \
-time you wake up you receive ONE complete data table covering your whole \
-tradeable universe (below the instructions, as MARKET BRIEF): for every name \
-its sector, price, TODAY's session so far (open% = change since today's open, \
-vsVWAP% = price vs today's volume-weighted average price, 15m%/30m% = change \
-over the last 15/30 minutes, dayRange% = where the price sits in today's \
-high-low range, 0 = at the low, 100 = at the high, volPace = today's volume \
-vs a normal day at this hour; in the first minutes after the open some of \
-these are still "." because there are too few bars yet), then the daily view: recent returns \
-(1d/5d/20d), trend (price vs its 20- and \
-50-day moving average), RSI14, position in its 52-week range, today's volume \
-vs normal, and fundamentals — forward P/E, profit margin, revenue growth, \
-earnings growth, ROE, debt/equity, analyst rating and the analyst target's \
-upside. A MARKET NOW line above the table gives SPY/QQQ since the open and how many \
-names are up vs down today. A "." means not available. Rows are in RANDOM order — position in \
-the table means nothing. Everyone in the pool sees the same data. You are \
-free to trade ANY ticker in it, chosen on your own thesis. You make ONE \
-decision per wake-up, then sleep until the next one (several minutes).
-
-"""
-
-_BRIEF_FORMAT = """Respond ONLY with JSON of this shape:
-{
-  "thoughts": "brief reasoning",
-  "orders": [ {"ticker":"TICKER","side":"buy"|"sell","amount":N,"stop_loss_pct":N,"charter_fit":"...","reason":"..."} ],
-  "message": "a short taunt/comment to your rivals (<=140 chars); they will read it",
-  "done": true,
-  "notes": "carry-forward notes to your future self"
-}
-Set done=true always — this is your one decision for this wake-up; use an empty \
-"orders" list to hold. Only """ + _TICKER_HINT + """. Buy only within your cash; sell only what \
-you hold. Amounts are in your account currency. You may also give "qty" (shares, \
-fractional OK) instead of amount."""
-
-
-def _system_prompt_brief() -> str:
-    """The same battle/rules prompt, minus the research-tool loop: opening
-    framing + the brief explanation + everything from 'Actively manage' on,
-    with the JSON format swapped for the single-decision one."""
-    a = _SYSTEM.index("You have NO watchlist")
-    b = _SYSTEM.index("How you trade is entirely your call")
-    c = _SYSTEM.index("Respond ONLY with JSON")
-    return _SYSTEM[:a] + _BRIEF_TOOLS + _SYSTEM[b:c] + _BRIEF_FORMAT
+Use an empty "orders" list to hold. Only """ + _TICKER_HINT + """. Buy only \
+within your cash; sell only what you hold. Amounts are in dollars; you may give \
+"qty" (fractional OK) instead of amount."""
 
 
 def _shuffled(table: str) -> str:
     """Header first, rows in a fresh random order for every agent and every
-    call. A fixed order (AAPL, MSFT, NVDA... or BTC first) puts the same names
-    at the top of every prompt, and LLMs measurably over-pick what they see
-    first — a bias that had nothing to do with the data."""
-    import random
+    call — LLMs over-pick what they see first, a bias unrelated to the data."""
     lines = table.splitlines()
     rows = lines[1:]
     random.shuffle(rows)
     return "\n".join(lines[:1] + rows)
 
 
-_UNIVERSE_BLOCK: str | None = None
-
-
-def _system_prompt() -> str:
-    """_SYSTEM plus the full tradeable universe, grouped by sector, so agents
-    pick from the whole thing on their own thesis instead of only from
-    whatever a scan surfaces. Built once (the listing is cached for a day)."""
-    global _UNIVERSE_BLOCK
-    if _UNIVERSE_BLOCK is None:
-        try:
-            from . import full_market
-            from .market import TRADE_UNIVERSE_MODE
-            listing = full_market.universe_listing(TRADE_UNIVERSE_MODE)
-        except Exception:
-            listing = ""
-        _UNIVERSE_BLOCK = (
-            "\n\nYOUR UNIVERSE — every ticker you may trade, by sector. Choose "
-            "from this whole list; scans only sample it:\n" + listing) if listing else ""
-    return _SYSTEM + _UNIVERSE_BLOCK
-
-
-def decide(view: dict, day: int, total_days: int, goal_pct: float,
-           guidelines: list[str], model: str | None = None,
-           brief: dict | None = None
+def decide(view: dict, decision_number: int, guidelines: list[str],
+           brief: dict | None, model: str | None = None
            ) -> tuple[list[dict], str, str, list[dict]]:
-    """Run the research→decide loop.
-
-    Returns (orders, updated_notes, message, trace) — `trace` is a full audit
-    log of every turn (thoughts, tools requested, what came back, and the
-    final action), independent of debug mode: it's cheap to build, and the
-    caller decides whether to persist it. See pit.live / pit.forward for how
-    it's written to `agent_audit` when debug mode is on.
-    """
+    """One decision. Returns (orders, notes, message, trace) — `trace` is the
+    audit record (thoughts, final action), persisted by the caller in debug
+    mode. Without a brief or a reachable model the agent holds."""
     trace: list[dict] = []
-
-    def _log(turn, active_model, data, requested=None, results=None) -> None:
-        trace.append({
-            "turn": turn, "model": active_model,
-            "thoughts": str((data or {}).get("thoughts", ""))[:2000],
-            "research_requested": requested,
-            "research_results": results,
-            "done": bool((data or {}).get("done")),
-            "orders": (data or {}).get("orders") if (data or {}).get("done") else None,
-            "message": (data or {}).get("message") if (data or {}).get("done") else None,
-            "raw_response": data,
-        })
-
+    notes = view.get("notes", "")
     model = model or DEFAULT_MODEL
-    if not llm_available(model):
-        return [], view.get("notes", ""), "", trace
+    if not brief or not llm_available(model):
+        return [], notes, "", trace
+    from .charter import enforce_on
     context = {
-        # live sessions are time-based: `day` is just the decision count, which
-        # agents read as calendar days ("Day 9, 4 min left") — name it plainly
-        **({"decision_number": day} if not total_days else
-           {"day": day, "total_days": total_days}),
-        "goal_pct": goal_pct,
+        "decision_number": decision_number,
         "your_cash": view["cash"], "your_positions": view["positions"],
         "your_total_value": view["total_value"],
         "your_return_pct": view["return_pct"],
-        "rival_return_pct": view.get("opponent_return_pct"),
         "rival_returns": view.get("rival_returns", {}),
         "rival_recent_messages": view.get("rival_messages", []),
         "orders_not_executed_last_tick": view.get("orders_not_executed_last_tick", []),
@@ -285,104 +142,48 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
         "your_charter_backtest": view.get("charter_backtest", ""),
         **({"charter_enforced": ("ON: any buy that doesn't meet your charter's entry "
                                  "conditions in the current table is rejected by the arena; "
-                                 "sells are never restricted")}
-           if __import__("pit.charter", fromlist=["enforce_on"]).enforce_on() else {}),
-        **({} if brief else {"charter_note": (
-            "Your charter is written in the live data table's columns, which this "
-            "mode doesn't provide — apply its spirit using what your research "
-            "tools return; no charter_fit is needed here.")}),
-        "your_notes": view.get("notes", ""),
+                                 "sells are never restricted")} if enforce_on() else {}),
+        "your_notes": notes,
         "shared_guidelines": guidelines,
         "arena_risk": view.get("risk"),
     }
-    if brief:
-        # one shared data table, one decision — no research loop
-        max_turns = 0
-        messages = [
-            {"role": "system", "content": _system_prompt_brief()},
-            {"role": "user", "content": json.dumps(context)},
-            {"role": "user", "content": f"MARKET BRIEF as of {brief['asof']} "
-                                        f"({brief['n']} names, random order):\n"
-                                        + (f"{brief['market']}\n" if brief.get("market") else "")
-                                        + f"{_shuffled(brief['text'])}"},
-        ]
-    else:
-        max_turns = MAX_RESEARCH_TURNS
-        messages = [
-            {"role": "system", "content": _system_prompt()},
-            {"role": "user", "content": json.dumps(context)},
-        ]
-
-    for turn in range(max_turns + 1):
-        force = turn == max_turns
-        if force:
-            messages.append({"role": "user",
-                             "content": "Decide now — you MUST return done=true with orders (or an empty list to hold)."
-                             if brief else
-                             "Final turn — you MUST return done=true with orders (or empty orders to hold)."})
-        data = None
-        active_model = model
-        for attempt in range(3):
-            try:
-                content = llm_chat(active_model, messages, temperature=0.6,
-                                   json_mode=True)
-                data = json.loads(content)
-                break
-            except Exception as exc:
-                # malformed JSON is common on some free models; treat it like
-                # any other retryable failure rather than giving up immediately
-                malformed = isinstance(exc, json.JSONDecodeError)
-                if attempt < 2 and (_is_retryable(exc) or malformed):
-                    time.sleep(0 if malformed else
-                              int(os.getenv("PIT_RATELIMIT_BACKOFF", "15")))
-                    continue
-                trace.append({"turn": turn + 1, "model": active_model,
-                              "thoughts": f"[llm-error {type(exc).__name__}]",
-                              "research_requested": None, "research_results": None,
-                              "done": True, "orders": None, "message": None,
-                              "raw_response": None})
-                return (_clean_orders([]),
-                        view.get("notes", ""),
-                        "", trace)
-        if data is None:
-            return [], view.get("notes", ""), "", trace
-        if not isinstance(data, dict):        # some models wrap in a list
-            data = {"orders": data} if isinstance(data, list) else {}
-
-        if data.get("done") or force:
-            _log(turn + 1, active_model, data)
-            return (_clean_orders(data.get("orders", []), charter_checkable=bool(brief)),
-                    str(data.get("notes", ""))[:600],
-                    str(data.get("message", ""))[:200], trace)
-
-        # otherwise: fulfil the research request and loop
-        research = data.get("research") or {}
-        # Some models return `research` as a bare list of tickers instead of
-        # {"history": [...]}. Normalise either shape.
-        if isinstance(research, list):
-            research = {"history": research}
-        elif not isinstance(research, dict):
-            research = {}
-        results = {}
-        if research.get("scan"):
-            # a fresh random slice of the WHOLE market each call — real
-            # discovery, never the same shortlist twice
-            results["scan"] = market.scan_full_market(n=20)
-        for t in (research.get("history") or [])[:8]:
-            h = market.history(str(t), days=30)
-            results.setdefault("history", {})[str(t).upper()] = h[-15:] if h else "no data"
-        for t in (research.get("fundamentals") or [])[:5]:
-            f = market.fundamentals(str(t))
-            results.setdefault("fundamentals", {})[str(t).upper()] = f or "no data"
-        _log(turn + 1, active_model, data, requested=research, results=results)
-        messages.append({"role": "assistant", "content": json.dumps(data)})
-        messages.append({"role": "user",
-                         "content": json.dumps({"research_results": results})})
-
-    return [], view.get("notes", ""), "", trace
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": json.dumps(context)},
+        {"role": "user", "content": f"MARKET BRIEF as of {brief['asof']} "
+                                    f"({brief['n']} names, random order):\n"
+                                    + (f"{brief['market']}\n" if brief.get("market") else "")
+                                    + _shuffled(brief["text"])},
+    ]
+    data = None
+    for attempt in range(3):
+        try:
+            data = json.loads(llm_chat(model, messages, temperature=0.6, json_mode=True))
+            break
+        except Exception as exc:
+            malformed = isinstance(exc, json.JSONDecodeError)
+            if attempt < 2 and (_is_retryable(exc) or malformed):
+                time.sleep(0 if malformed else int(os.getenv("PIT_RATELIMIT_BACKOFF", "15")))
+                continue
+            trace.append({"turn": 1, "model": model, "done": True, "orders": None,
+                          "message": None, "raw_response": None,
+                          "research_requested": None, "research_results": None,
+                          "thoughts": f"[llm-error {type(exc).__name__}]"})
+            return [], notes, "", trace
+    if not isinstance(data, dict):        # some models wrap the reply in a list
+        data = {"orders": data} if isinstance(data, list) else {}
+    trace.append({"turn": 1, "model": model, "done": True,
+                  "thoughts": str(data.get("thoughts", ""))[:2000],
+                  "orders": data.get("orders"), "message": data.get("message"),
+                  "research_requested": None, "research_results": None,
+                  "raw_response": data})
+    return (_clean_orders(data.get("orders", [])), str(data.get("notes", ""))[:600],
+            str(data.get("message", ""))[:200], trace)
 
 
-def _clean_orders(orders: list, charter_checkable: bool = True) -> list[dict]:
+def _clean_orders(orders: list) -> list[dict]:
+    """Validate the model's orders; mark buys that are off-charter (declared
+    deviation) or that state no charter fit at all."""
     out = []
     for o in orders or []:
         try:
@@ -391,9 +192,7 @@ def _clean_orders(orders: list, charter_checkable: bool = True) -> list[dict]:
                 continue
             reason = str(o.get("reason", ""))[:160]
             fit = str(o.get("charter_fit", "")).strip()
-            if not charter_checkable:
-                pass   # research mode (replay): no data table to check a charter against
-            elif side == "buy" and fit.lower().startswith("deviation"):
+            if side == "buy" and fit.lower().startswith("deviation"):
                 reason = ("⚠ off-charter: " + fit[len("deviation"):].lstrip(" :—-")[:80]
                           + " | " + reason)[:200]
             elif side == "buy" and not fit:

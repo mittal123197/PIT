@@ -74,7 +74,7 @@ def _market_label() -> str:
     """Human label for what this session trades, shown on the leaderboard."""
     mode = market.TRADE_UNIVERSE_MODE
     base = ("Crypto" if MARKET == "crypto" else
-            {"top100": "US top 100", "top500": "US S&P 500", "full": "US all-listed"}
+            {"top100": "US top 100"}
             .get(mode, f"US {mode}") if MARKET == "us" else MARKET.upper())
     if replay._STATE and replay._STATE.get("day"):
         return f"{base} · replay {replay._STATE['day']}"
@@ -114,7 +114,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
               f"{CURRENCY}{config.base_capital:,.0f} paper each. Watch /live.\n",
               flush=True)
 
-    if not replay._STATE and brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
+    if brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
         brief_mod.prefetch_fundamentals(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
                                         verbose)
     _set_risk_bands(conn, config, rnd, minutes, verbose)
@@ -317,28 +317,29 @@ def _clear_memory_for_replay(conn, rnd, verbose) -> None:
               flush=True)
 
 
+def current_brief() -> dict | None:
+    """The agents' data table right now: the replayed bar in a replay, else
+    the live brief for the configured universe (None if unavailable)."""
+    if replay._STATE:
+        return replay.brief()
+    if not brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
+        return None
+    return brief_mod.get_brief(market.TRADE_UNIVERSE_MODE)
+
+
 def _set_risk_bands(conn, config, rnd, minutes, verbose) -> None:
     """Size this round's stops and take-profit from its length and the
-    universe's real volatility (pit/risk.py). Without volatility data (replay,
-    or a universe with no brief) the flat config bands stay in force."""
+    universe's real volatility (pit/risk.py). Without volatility data the
+    flat config bands stay in force."""
     risk.clear()
     mkt = "crypto" if market.TRADE_UNIVERSE_MODE == "crypto" else "us"
     if replay._STATE:
-        # a replay compresses one whole trading session: the horizon is the
-        # session (390 min), volatility from the days BEFORE the replayed one
-        if market.TRADE_UNIVERSE_MODE == "full":
-            return
-        try:
-            vols = brief_mod.daily_vols(brief_mod.symbols_for(market.TRADE_UNIVERSE_MODE),
-                                        replay._STATE["day"])
-        except Exception:
-            return
-        minutes = risk.minutes_per_day(mkt)
+        # a replay compresses one whole session: the horizon is the session,
+        # volatility as it stood going into the replayed day
+        vols, minutes = replay.vols(), risk.minutes_per_day(mkt)
     else:
-        if not brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
-            return
         try:
-            b = brief_mod.get_brief(market.TRADE_UNIVERSE_MODE)
+            b = current_brief()
         except Exception:
             b = None
         vols = {s: f.get("dvol") for s, f in ((b or {}).get("features") or {}).items()}
@@ -398,19 +399,6 @@ def _refresh_marks(conn, config, rnd, verbose):
 
 
 def _tick(conn, config, rnd, tick, verbose, debug=False):
-    # The replay clock is NOT paused here. It used to be (so slow LLM
-    # thinking couldn't burn simulated market time), but with agents deciding
-    # concurrently and ticks scheduled from their start, a tick can fill the
-    # whole interval — freezing the clock for the entire run: zero price
-    # marks and every return stuck at 0.00% (seen live). Consistency inside a
-    # tick doesn't need a frozen clock anyway: positions, fills and returns
-    # all use the per-tick price cache (_price_fn), and the per-tick snapshot
-    # keeps every agent's view identical. At sensible compression (compress
-    # >= ~10) a tick is a few simulated minutes, nowhere near end-of-day.
-    _tick_body(conn, config, rnd, tick, verbose, debug)
-
-
-def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     # A replayed session that has already reached its close has nothing left
     # to trade: agents used to wake once more "after the bell", spend an LLM
     # call reasoning that "orders hit next session", and learn nothing.
@@ -505,24 +493,20 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     # Threads overlap the LLM waits where the backend allows it (a hosted
     # API, or Ollama with OLLAMA_NUM_PARALLEL>1); a single-slot local server
     # just queues them, which costs nothing.
-    # one shared market brief per tick (fundamentals + technicals for the
-    # whole universe) -> every agent makes a single decision from it, instead
-    # of a multi-turn research loop. Not in replay (needs historical data).
+    # one shared data table per tick -> every agent decides from it once
     brief = None
-    if (jobs and not replay._STATE and brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE)):
+    if jobs:
         try:
-            brief = brief_mod.get_brief(market.TRADE_UNIVERSE_MODE)
+            brief = current_brief()
         except Exception as exc:
             if verbose:
-                print(f"  [brief unavailable, falling back to research mode: {exc!r}]",
-                      flush=True)
+                print(f"  [market table unavailable this tick, agents hold: {exc!r}]", flush=True)
     if verbose and brief:
         print(f"  [brief: {brief['n']} names, as of {brief['asof']}]", flush=True)
-    kw = {"brief": brief} if brief else {}
 
     def _decide(job):
-        return autonomous.decide(job["view"], tick, 0, rnd["goal_pct"], guidelines,
-                                 model=job["cfg"].get("model"), **kw)
+        return autonomous.decide(job["view"], tick, guidelines, brief,
+                                 model=job["cfg"].get("model"))
     if jobs:
         workers = len(jobs) if os.getenv("PIT_PARALLEL_AGENTS", "1") != "0" else 1
         with ThreadPoolExecutor(max_workers=workers) as ex:

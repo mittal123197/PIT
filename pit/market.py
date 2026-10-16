@@ -1,13 +1,9 @@
-"""On-demand real market data — no fixed universe.
+"""Live market data: quotes and fundamentals for any ticker.
 
-Two backends behind one interface:
-  * yfinance (default) — free, no key, but delayed ~15 min / end-of-day.
-  * Alpaca (PIT_DATA_SOURCE=alpaca + ALPACA_API_KEY/SECRET) — free real-time US
-    (IEX) quotes, daily bars, AND a real market-wide movers screener.
-
-Agents name any ticker; this fetches its real data. `movers()` is a discovery
-aid ("what's moving today"); agents may still trade ANY ticker. Each backend
-falls back to yfinance on error so a missing key or a hiccup never stops a run.
+Two backends behind one interface — yfinance (default, free, no key) and
+Alpaca (PIT_DATA_SOURCE=alpaca + ALPACA_API_KEY/SECRET, real-time IEX quotes);
+Alpaca falls back to yfinance on error. During a replay, pit/replay.py swaps
+`quote()` for the replayed day's prices.
 """
 from __future__ import annotations
 
@@ -19,11 +15,8 @@ import urllib.request
 
 
 DATA_SOURCE = os.getenv("PIT_DATA_SOURCE", "yfinance").lower()
-# 'top500' (default) restricts full-market scans to S&P 500 constituents — a
-# real published index, quality-filtered but still ~500 genuinely diverse
-# companies, not the same handful of mega-caps. 'full' restores the
-# unrestricted ~5,400-ticker universe. See full_market.py / config.py.
-TRADE_UNIVERSE_MODE = os.getenv("PIT_TRADE_UNIVERSE", "top500").lower()
+# the tradeable universe: 'top100' (US) or 'crypto' — see full_market.py
+TRADE_UNIVERSE_MODE = os.getenv("PIT_TRADE_UNIVERSE", "top100").lower()
 _ALPACA_DATA = "https://data.alpaca.markets"
 
 
@@ -131,43 +124,6 @@ def _round_price(v) -> float:
     return round(float(v), 8)
 
 
-def scan_full_market(n: int = 20, sample_size: int | None = None,
-                     seed: int | None = None) -> dict:
-    """A NEUTRAL look at a random slice of the universe: `n` randomly chosen
-    names with their sector, current price and today's move, listed
-    alphabetically — deliberately NOT ranked by performance. The old version
-    returned the sample's top gainers/losers, which funnelled every agent
-    into the same few day-movers (all three buying whatever was +11% that
-    morning). A random slice is just a prompt for ideas; agents are expected
-    to choose from the whole universe (listed in their system prompt) on
-    their own thesis."""
-    from . import full_market
-    sample = full_market.random_sample(sample_size or n, seed=seed,
-                                       mode=TRADE_UNIVERSE_MODE)
-    if not sample:
-        return {"sample": [],
-                "note": "universe unreachable; use your own knowledge of the "
-                        "universe listed in your instructions"}
-    info = full_market.sector_map(TRADE_UNIVERSE_MODE)
-    try:
-        df = _movers_download(sample, "7d", "1d", 15)
-        prices = _extract_closes(df, sample)
-    except Exception:
-        prices = {}
-    rows = []
-    for t in sorted(prices):
-        price, prev = prices[t]
-        rows.append({"ticker": t, "sector": info.get(t, ("", ""))[1],
-                     "price": _round_price(price),
-                     "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0})
-    return {"sample": rows,
-            "note": "random slice, alphabetical, NOT ranked — one source of ideas, "
-                    "not a recommendation",
-            "universe_size": full_market.universe_size(TRADE_UNIVERSE_MODE)}
-
-
-# ---- Alpaca backend (real-time US via IEX) ----------------------------
-
 def _alpaca_get(path: str):
     req = urllib.request.Request(_ALPACA_DATA + path, headers={
         "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
@@ -239,31 +195,3 @@ def _yf_quote(ticker: str) -> dict | None:
     return {"ticker": ticker.upper().strip(), "price": price, "prev_close": prev,
             "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0,
             "asof": h[-1][0]}
-
-
-def _movers_download(tickers: list[str], period: str, interval: str, timeout: int):
-    yf = _yf()
-    # threads=False: yfinance's default is one thread per ticker, which for a
-    # bulk request is exactly the burst pattern that gets a chunk of them
-    # throttled/timed-out by Yahoo with no data — see the matching fix in
-    # replay.py's _load_tickers for the full writeup (same root cause, this
-    # is the live/real-time code path's version of it).
-    return yf.download(tickers, period=period, interval=interval,
-                       progress=False, auto_adjust=True, timeout=timeout,
-                       threads=False)
-
-
-def _extract_closes(df, tickers: list[str]) -> dict[str, tuple[float, float]]:
-    out = {}
-    try:
-        close = df["Close"]
-    except Exception:
-        return out
-    for t in tickers:
-        try:
-            s = close[t].dropna() if hasattr(close, "columns") else close.dropna()
-            if len(s) >= 2:
-                out[t] = (float(s.iloc[-1]), float(s.iloc[-2]))
-        except Exception:
-            continue
-    return out

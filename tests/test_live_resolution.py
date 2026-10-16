@@ -54,7 +54,7 @@ def _wire_deterministic_winner(monkeypatch):
         state["price"] += 0.5
         return {"price": state["price"]}
 
-    def fake_decide(view, tick, total_days, goal_pct, guidelines, model=None):
+    def fake_decide(view, tick, guidelines, brief=None, model=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return ([{"ticker": "AAA", "side": "buy", "qty": 500,

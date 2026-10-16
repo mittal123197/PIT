@@ -61,9 +61,8 @@ class ArenaConfig:
     max_adoptions_per_round: int = _env_int("PIT_MAX_ADOPTIONS_PER_ROUND", 1)
 
     # --- the tradeable universe for live sessions ---
-    # 'top100' (curated large US names), 'top500' (S&P 500), 'full' (every
-    # NASDAQ/NYSE/AMEX listing) or 'crypto'. See pit/full_market.py.
-    trade_universe_mode: str = os.getenv("PIT_TRADE_UNIVERSE", "top500").lower()
+    # 'top100' (curated large US names) or 'crypto'. See pit/full_market.py.
+    trade_universe_mode: str = os.getenv("PIT_TRADE_UNIVERSE", "top100").lower()
 
     def stop_loss_pct_for(self, round_days: int) -> float:
         """Fallback portfolio stop for a round of this length (sqrt-time);

@@ -1,288 +1,159 @@
-"""Replay a past trading day at compressed speed.
+"""Replay a past trading day at compressed speed, from the market history.
 
-Monkey-patches `market.quote()` so every price fetch returns the value at the
-current *replay cursor* — which advances on wall-clock time, compressing the
-~6.5h US session into e.g. 15 minutes.
+The day comes from pit/history.py's panel — the same data-table columns the
+live brief shows, for every top-100 stock at every 5-minute bar of the last
+~60 trading days (daily columns use only closes BEFORE that day, so there is
+no lookahead). A wall-clock timer advances a simulated clock through the
+session; at any moment the replay serves:
 
-There is deliberately no default watchlist. Agents name tickers themselves; the
-replay lazily loads 5-minute bars for each named ticker on first quote.
+  * prices  — market.quote() is patched to the latest bar at the sim clock,
+              so fills, marks and stops all see the replayed day;
+  * brief() — the agents' data table as it stood at that bar;
+  * vols()  — each name's daily volatility, for the round's risk bands.
 
-Everything else — agents, decisions, dashboard — is unchanged. To an agent the
-replay looks like a live-moving market.
+Agents therefore trade a replay exactly as they trade live: one table, one
+decision per wake-up, charters checkable, rulebook evidence recorded.
 """
 from __future__ import annotations
 
-import os
 import time
 from datetime import date, datetime, timedelta
 
 from . import market
 
 _ORIGINAL_QUOTE = None
-_ORIGINAL_SCAN = None
-_ORIGINAL_HISTORY = None
-_HIST_CACHE: dict = {}
 _STATE: dict = {}
+INDEXES = ("SPY", "QQQ")
 
 
-def _last_trading_day(before: date | None = None) -> date:
-    """Most recent COMPLETED trading day (i.e. never today, since today's session
-    may still be open / have no data yet)."""
-    d = (before or date.today()) - timedelta(days=1)
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d
+def available_days() -> list[date]:
+    from . import history
+    df = history.panel()
+    return sorted(df["day"].unique()) if df is not None else []
 
 
-def load_day(tickers: list[str] | None = None,
-             day: date | None = None) -> dict:
-    """Fetch 5-min bars for the target trading day. Returns {ticker: [(dt, price), ...]}."""
-    tickers = [t.upper().strip() for t in (tickers or []) if t.strip()]
-    if not tickers:
-        return {}
-    return _load_tickers(tickers, day or _last_trading_day())
-
-
-def _download(tickers: list[str], day: date):
-    import yfinance as yf
-    start = day.isoformat()
-    end = (day + timedelta(days=1)).isoformat()
-    # threads=False: yfinance's default is to fire one thread per ticker,
-    # which for a 150-ticker scan means ~150 near-simultaneous requests to
-    # Yahoo's API — exactly the burst pattern that gets a chunk of them
-    # throttled back with no data (yfinance's own error message for that is
-    # the misleading "possibly delisted", even for large, very-much-listed
-    # names like HON or SLB). Sequential requests are slower wall-clock, but
-    # that's no longer a real cost here — the replay clock is paused for the
-    # whole tick regardless (see pause()/resume()), so slower fetching
-    # doesn't burn simulated market time either.
-    return yf.download(tickers, start=start, end=end, interval="5m",
-                       progress=False, auto_adjust=True, timeout=30,
-                       threads=False)
-
-
-def _extract_series(df, tickers: list[str]) -> dict:
-    close = df["Close"]
-    series = {}
-    for t in tickers:
-        try:
-            s = close[t].dropna() if hasattr(close, "columns") else close.dropna()
-            if len(s) > 0:
-                # 8 decimals, not 2 — see market._round_price: 2 rounds a
-                # sub-cent crypto price (e.g. SHIB-USD) straight to 0.0.
-                series[t] = [(idx.to_pydatetime(), market._round_price(v))
-                             for idx, v in s.items()]
-        except (KeyError, AttributeError):
-            continue
-    return series
-
-
-def _load_tickers(tickers: list[str], day: date) -> dict:
-    print(f"[replay] loading {len(tickers)} tickers for {day} (5-min bars)...",
-          flush=True)
-    df = _download(tickers, day)
-    if df is None or df.empty:
-        raise RuntimeError(f"no intraday data available for {day}")
-    series = _extract_series(df, tickers)
-
-    # A request this size routinely drops a handful of tickers to Yahoo's own
-    # throttling, not real data gaps — retry just the misses once, after a
-    # short pause, rather than silently losing real, tradeable names every
-    # single call.
-    missing = [t for t in tickers if t not in series]
-    if missing and len(missing) < len(tickers):
-        time.sleep(2.0)
-        retry_df = _download(missing, day)
-        if retry_df is not None and not retry_df.empty:
-            series.update(_extract_series(retry_df, missing))
-
-    if series:
-        print(f"[replay] loaded {len(series)} ticker(s), "
-              f"{len(next(iter(series.values())))} bars each", flush=True)
-    return series
-
-
-# A reliably-liquid ticker used ONLY to anchor the sim clock to the real full
-# trading session — never as a trade suggestion. An arbitrary randomly-sampled
-# ticker is a bad anchor: some stocks trade in a narrow window or have sparse
-# 5-min bars (a handful of bars covering a couple hours, not the full ~6.5h
-# session), which silently truncates and skews the whole day's clock.
-_CLOCK_ANCHOR_TICKER = "SPY"
-
-
-def start(tickers: list[str] | None = None, day: date | None = None,
-          compress_minutes: int | None = None) -> None:
-    """Begin replaying `day`, compressing the session into `compress_minutes`
-    of wall clock. Monkey-patches market.quote so all callers see replay prices.
-
-    The sim clock is anchored to SPY's own bar range for the day (always a
-    full, clean session) rather than whatever ticker an agent happens to look
-    up first — that used to occasionally pin the whole session's clock to a
-    thinly-traded stock's narrow, sparse data window."""
-    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN, _ORIGINAL_HISTORY
-    day = day or _last_trading_day()
-    series = load_day(tickers, day)
-    compress = compress_minutes or int(os.getenv("PIT_REPLAY_MINUTES", "20"))
-
+def start(day: date | None = None, compress_minutes: int | None = None) -> None:
+    """Begin replaying `day` (default: the last completed session in the
+    history), compressing the session into `compress_minutes` of wall clock."""
+    global _ORIGINAL_QUOTE
+    from . import history
+    df = history.panel()
+    if df is None:
+        raise RuntimeError("replay needs the US top-100 market history "
+                           "(PIT_MARKET=us, PIT_TRADE_UNIVERSE=top100)")
+    days = sorted(df["day"].unique())
+    if day is None:
+        today = datetime.now().date()
+        day = next(d for d in reversed(days) if d < today)
+    if day not in days:
+        raise RuntimeError(f"{day} isn't in the market history "
+                           f"({days[0]} … {days[-1]}, the last ~60 sessions)")
+    d = df[df["day"] == day]
+    bars = sorted(d["ts"].unique())
+    compress = compress_minutes or 20
+    sim_start, sim_end = bars[0], bars[-1] + timedelta(minutes=5)
     _STATE.clear()
-    _STATE.update({"series": series, "day": day, "missing": set(),
-                   "compress_minutes": compress,
-                   "sim_start": None, "sim_end": None,
-                   "start_wall": None, "speed": None})
-
-    anchor = _load_tickers([_CLOCK_ANCHOR_TICKER], day).get(_CLOCK_ANCHOR_TICKER)
-    if anchor and len(anchor) >= 10:  # sanity check: a real full session
-        _STATE["series"][_CLOCK_ANCHOR_TICKER] = anchor
-        _anchor_clock(anchor[0][0], anchor[-1][0])
-    elif series:  # SPY somehow failed; fall back to whatever was given upfront
-        first = next(iter(series.values()))
-        _anchor_clock(first[0][0], first[-1][0])
-
+    _STATE.update({
+        "day": day, "bars": bars, "rows": d.set_index(["ts", "sym"]).sort_index(),
+        "sim_start": sim_start, "sim_end": sim_end, "start_wall": time.time(),
+        "speed": (sim_end - sim_start).total_seconds() / max(60, compress * 60),
+        "brief_cache": {}})
     if _ORIGINAL_QUOTE is None:
         _ORIGINAL_QUOTE = market.quote
-        _ORIGINAL_SCAN = market.scan_full_market
-        _ORIGINAL_HISTORY = market.history
     market.quote = _replay_quote  # type: ignore
-    market.scan_full_market = _replay_scan  # type: ignore
-    market.history = _replay_history  # type: ignore
-    _HIST_CACHE.clear()
-    print(f"[replay] unbiased ticker discovery for {day}: agents name symbols; "
-          f"bars load on demand, session compressed to ~{compress} wall-clock "
-          f"minutes (clock starts on the first ticker looked up).", flush=True)
-
-
-def _anchor_clock(sim_start: datetime, sim_end: datetime) -> None:
-    """Set the sim clock's start/end/speed from a real bar range, and start the
-    wall-clock timer now. Called once, the first time any ticker is loaded."""
-    compress = _STATE["compress_minutes"]
-    real_span = (sim_end - sim_start).total_seconds()
-    speed = real_span / max(60, compress * 60)
-    _STATE.update({"sim_start": sim_start, "sim_end": sim_end,
-                   "start_wall": time.time(), "speed": speed})
-    print(f"[replay] clock anchored to {sim_start.strftime('%H:%M')}–"
-          f"{sim_end.strftime('%H:%M')} (data tz) at {speed:.0f}x", flush=True)
+    print(f"[replay] {day}: {d['sym'].nunique()} names, {len(bars)} bars, "
+          f"session compressed to ~{compress} wall-clock minutes "
+          f"({_STATE['speed']:.0f}x)", flush=True)
 
 
 def stop() -> None:
-    global _ORIGINAL_QUOTE, _ORIGINAL_SCAN, _ORIGINAL_HISTORY
+    global _ORIGINAL_QUOTE
     if _ORIGINAL_QUOTE is not None:
         market.quote = _ORIGINAL_QUOTE
-        market.scan_full_market = _ORIGINAL_SCAN
-        market.history = _ORIGINAL_HISTORY
         _ORIGINAL_QUOTE = None
-        _ORIGINAL_SCAN = None
-        _ORIGINAL_HISTORY = None
     _STATE.clear()
 
 
 def sim_now() -> datetime | None:
-    if not _STATE or _STATE.get("start_wall") is None:
-        return None  # clock not anchored yet — nobody has looked up a ticker
-    wall_now = _STATE.get("paused_at") or time.time()
-    elapsed = (wall_now - _STATE["start_wall"]) * _STATE["speed"]
-    return _STATE["sim_start"] + timedelta(seconds=elapsed)
+    if not _STATE:
+        return None
+    t = _STATE["sim_start"] + timedelta(
+        seconds=(time.time() - _STATE["start_wall"]) * _STATE["speed"])
+    return min(t, _STATE["sim_end"])
 
 
-def pause() -> None:
-    """Freeze the sim clock's advance. Call before any real-time-expensive,
-    non-market work (an agent's multi-turn LLM decision loop, in practice) so
-    that latency there doesn't silently burn simulated market time.
-
-    Without this, the clock keeps advancing at `speed`x for however long the
-    LLM calls actually take in the real world — at 90x+ speeds, a single
-    slow multi-agent tick can burn hours of simulated time before the tick
-    even finishes, blowing straight past end-of-day and leaving every
-    subsequent price lookup (including mark-to-market refreshes) frozen on
-    the day's last bar for the rest of the session. It also means, within
-    one nominal tick, agents queried later would see a different simulated
-    instant than agents queried earlier — silently breaking "every agent
-    trades the same round, at the same time." Pausing keeps the whole tick
-    pinned to one consistent instant. No-op if the clock isn't anchored yet
-    or is already paused.
-    """
-    if not _STATE or _STATE.get("start_wall") is None or _STATE.get("paused_at") is not None:
-        return
-    _STATE["paused_at"] = time.time()
-
-
-def resume() -> None:
-    """Undo pause(): shift the clock's origin forward by however long it was
-    paused, so no simulated time is counted as having passed while paused."""
-    if not _STATE or _STATE.get("paused_at") is None:
-        return
-    paused_for = time.time() - _STATE["paused_at"]
-    _STATE["start_wall"] += paused_for
-    _STATE["paused_at"] = None
-
-
-def is_finished() -> bool:
+def _bar() -> datetime | None:
+    """The latest completed bar at the sim clock."""
     now = sim_now()
-    return bool(now and _STATE and now >= _STATE["sim_end"])
+    if now is None:
+        return None
+    done = [b for b in _STATE["bars"] if b <= now]
+    return done[-1] if done else _STATE["bars"][0]
+
+
+def _row(sym: str):
+    try:
+        return _STATE["rows"].loc[(_bar(), sym)]
+    except KeyError:
+        return None
 
 
 def _replay_quote(ticker: str) -> dict | None:
-    t = ticker.upper().strip()
-    series = _STATE.get("series", {}).get(t)
-    if not series and t not in _STATE.get("missing", set()) and _STATE.get("day"):
-        got = _load_tickers([t], _STATE["day"])
-        if got.get(t):
-            _STATE["series"][t] = got[t]
-            series = got[t]
-            if _STATE.get("start_wall") is None:  # first ticker ever -> anchor now
-                _anchor_clock(series[0][0], series[-1][0])
-        else:
-            _STATE["missing"].add(t)
-    now = sim_now()
-    if not series or not now:
-        # never fall back to today's live quote: that's a price from the
-        # future relative to the replayed session
+    r = _row(ticker.upper().strip())
+    if r is None:
         return None
-    price = _price_at(series, now)
-    prev = series[0][1]
-    return {"ticker": t, "price": price, "prev_close": prev,
-            "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0,
-            "asof": now.strftime("%H:%M")}
+    px = float(r["px"])
+    prev = px / (1 + r["d1"] / 100) if r["d1"] == r["d1"] else px
+    return {"ticker": ticker.upper(), "price": px, "prev_close": prev,
+            "change_pct": round(float(r["d1"]), 2) if r["d1"] == r["d1"] else 0.0,
+            "asof": _bar().strftime("%H:%M")}
 
 
-def _replay_history(ticker: str, days: int = 30) -> list[tuple[str, float]]:
-    """Daily closes strictly BEFORE the replayed day, plus the replayed day's
-    price so far as the last point. The live history call returns today's
-    data — in a replay of a past day that leaked the day's own close (agents
-    saw PLTR's +5.2% before the session had played it out)."""
-    import datetime as _dt
-    t = ticker.upper().strip()
-    day = _STATE.get("day")
-    if not day:
-        return []
-    if t not in _HIST_CACHE:
-        rows: list[tuple[str, float]] = []
-        try:
-            import yfinance as yf
-            df = yf.download(t, start=(day - _dt.timedelta(days=int(days * 1.6) + 10)).isoformat(),
-                             end=day.isoformat(), interval="1d", progress=False,
-                             auto_adjust=True, timeout=30, threads=False)
-            close = df["Close"]
-            if hasattr(close, "columns"):
-                close = close[t] if t in close.columns else close.iloc[:, 0]
-            rows = [(d.strftime("%Y-%m-%d"), round(float(v), 4))
-                    for d, v in close.dropna().items() if d.date() < day]
-        except Exception:
-            rows = []
-        _HIST_CACHE[t] = rows
-    out = list(_HIST_CACHE[t][-days:])
-    q = _replay_quote(t)
-    if q and q.get("price"):
-        out.append((f"{day.isoformat()} {q['asof']} (now)", q["price"]))
-    return out
+def vols() -> dict[str, float]:
+    """Each name's daily volatility (%) going into the replayed day."""
+    first = _STATE["rows"].loc[_STATE["bars"][0]]
+    return {s: float(v) for s, v in first["dvol"].items() if v == v and s not in INDEXES}
 
+
+def brief() -> dict | None:
+    """The agents' data table as it stood at the current bar (cached per bar)."""
+    from . import brief as brief_mod, full_market
+    bar = _bar()
+    if bar is None:
+        return None
+    cached = _STATE["brief_cache"].get(bar)
+    if cached:
+        return cached
+    at = _STATE["rows"].loc[bar]
+    fund = brief_mod._load_fund()
+    sectors = {r["symbol"]: r.get("sector", "") for r in full_market.universe_for("top100")}
+    rows, prices, features, intra = [], {}, {}, {}
+    for sym, r in at.iterrows():
+        t = {k: (None if v is None or v != v else float(v)) for k, v in r.items()
+             if k not in ("sym", "day", "bar")}
+        intra[sym] = t
+        if sym in INDEXES:
+            continue
+        f = (fund.get(sym) or {}).get("f")
+        prices[sym] = t["px"]
+        features[sym] = {k: t.get(k) for k in brief_mod.RULE_FIELDS.values()}
+        rows.append(brief_mod._row(sym, sectors.get(sym, ""), t, f))
+    value = {"text": brief_mod._HEADER + "\n" + "\n".join(rows), "prices": prices,
+             "features": features, "n": len(rows),
+             "asof": f"{_STATE['day']} {bar.strftime('%H:%M')} ET (replay)",
+             "market": brief_mod._market_line(intra, "top100")}
+    _STATE["brief_cache"][bar] = value
+    return value
+
+
+# ---- the replay clock, as agents and the dashboard should see it ----------
 
 def market_ts(wall_ts: str | None) -> str | None:
-    """Translate a stored wall-clock stamp ("YYYY-mm-dd HH:MM:SS", local)
-    into the replayed session's own time in New York ("2026-10-09 09:49 ET").
-    Fills are stamped in wall time, so in a 10-minute replay a buy at the
-    open read as "15:49" — an agent concluded it had bought "~10 minutes
-    before the close" and drew the wrong lesson. None if no replay is active."""
-    if not wall_ts or not _STATE.get("start_wall") or not _STATE.get("sim_start"):
+    """A stored wall-clock stamp ("YYYY-mm-dd HH:MM:SS", local) as the replayed
+    session's own time ("2026-10-09 09:49 ET"). Fills are stamped in wall
+    time; in a 10-minute replay an opening buy otherwise read as "15:49" and an
+    agent concluded it had bought "before the close". None outside a replay."""
+    if not wall_ts or not _STATE:
         return None
     try:
         wall = time.mktime(datetime.strptime(wall_ts[:19], "%Y-%m-%d %H:%M:%S").timetuple())
@@ -290,30 +161,24 @@ def market_ts(wall_ts: str | None) -> str | None:
         return None
     sim = _STATE["sim_start"] + timedelta(seconds=max(0.0, wall - _STATE["start_wall"])
                                           * _STATE["speed"])
-    sim = min(sim, _STATE["sim_end"])
+    return _et(min(sim, _STATE["sim_end"])).strftime("%Y-%m-%d %H:%M ET")
+
+
+def _et(d: datetime) -> datetime:
     try:
         from zoneinfo import ZoneInfo
-        if sim.tzinfo is not None:
-            sim = sim.astimezone(ZoneInfo("America/New_York"))
+        return d.astimezone(ZoneInfo("America/New_York")) if d.tzinfo else d
     except Exception:
-        pass
-    return sim.strftime("%Y-%m-%d %H:%M ET")
+        return d
 
 
 def anchor() -> dict | None:
     """The replay clock as plain data (ET, naive) for the dashboard."""
-    if not _STATE.get("start_wall") or not _STATE.get("sim_start"):
+    if not _STATE:
         return None
-    def et(d):
-        try:
-            from zoneinfo import ZoneInfo
-            if d.tzinfo is not None:
-                d = d.astimezone(ZoneInfo("America/New_York"))
-        except Exception:
-            pass
-        return d.strftime("%Y-%m-%d %H:%M:%S")
     return {"start_wall": _STATE["start_wall"], "speed": _STATE["speed"],
-            "sim_start": et(_STATE["sim_start"]), "sim_end": et(_STATE["sim_end"])}
+            "sim_start": _et(_STATE["sim_start"]).strftime("%Y-%m-%d %H:%M:%S"),
+            "sim_end": _et(_STATE["sim_end"]).strftime("%Y-%m-%d %H:%M:%S")}
 
 
 def agent_ts(wall_ts: str | None) -> str | None:
@@ -323,59 +188,6 @@ def agent_ts(wall_ts: str | None) -> str | None:
 
 def sim_minutes_left() -> float | None:
     now = sim_now()
-    if not now or not _STATE.get("sim_end"):
+    if now is None:
         return None
     return max(0.0, round((_STATE["sim_end"] - now).total_seconds() / 60, 1))
-
-
-def _price_at(series: list[tuple[datetime, float]], now: datetime) -> float:
-    """The latest bar price at or before `now`; falls back to the first bar."""
-    price = None
-    for dt, p in series:
-        if dt.replace(tzinfo=None) <= now.replace(tzinfo=None):
-            price = p
-        else:
-            break
-    return price if price is not None else series[0][1]
-
-
-def _replay_scan(n: int = 20, sample_size: int | None = None,
-                 seed: int | None = None) -> dict:
-    """Neutral random slice (alphabetical, NOT ranked by performance) of the
-    universe, priced at the REPLAY clock — same shape as market.scan_full_market."""
-    from . import full_market
-    from .market import TRADE_UNIVERSE_MODE
-    day = _STATE.get("day")
-    if not day:
-        return {"sample": [], "note": "replay not active"}
-    sample = full_market.random_sample(sample_size or n, seed=seed,
-                                       mode=TRADE_UNIVERSE_MODE)
-    if not sample:
-        return {"sample": [], "note": "universe unreachable this call"}
-    cache = _STATE.setdefault("series", {})
-    to_fetch = [t for t in sample if t not in cache and t not in _STATE.get("missing", set())]
-    fetched = _load_tickers(to_fetch, day) if to_fetch else {}
-    for t, series in fetched.items():
-        cache[t] = series
-    _STATE.setdefault("missing", set()).update(t for t in to_fetch if t not in fetched)
-    got = {t: cache[t] for t in sample if t in cache}
-    if _STATE.get("start_wall") is None and got:
-        first = next(iter(got.values()))
-        _anchor_clock(first[0][0], first[-1][0])
-    info = full_market.sector_map(TRADE_UNIVERSE_MODE)
-    now = sim_now()
-    rows = []
-    for t in sorted(got):
-        series = got[t]
-        if len(series) < 2 or not now:
-            continue
-        price = _price_at(series, now)
-        first_price = series[0][1]
-        if first_price:
-            rows.append({"ticker": t, "sector": info.get(t, ("", ""))[1],
-                         "price": market._round_price(price),
-                         "change_pct": round((price / first_price - 1) * 100, 2)})
-    return {"sample": rows,
-            "note": "random slice, alphabetical, NOT ranked — one source of ideas, "
-                    "not a recommendation",
-            "universe_size": full_market.universe_size(TRADE_UNIVERSE_MODE)}

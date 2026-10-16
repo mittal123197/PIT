@@ -42,7 +42,7 @@ def test_tick_allows_a_buy_on_a_ticker_a_rival_already_holds(monkeypatch):
                  (json.dumps({"AAA": 10.0}), rid, viper_id))
     conn.commit()
 
-    def fake_decide(view, tick, total_days, goal_pct, guidelines, model=None):
+    def fake_decide(view, tick, guidelines, brief=None, model=None):
         # identify "not VIPER" by an empty book rather than by model string —
         # RONIN and VIPER can share the same model (both default to the cheap
         # DeepSeek tier), so model identity alone can't distinguish agents
@@ -68,7 +68,7 @@ def test_tick_allows_a_buy_on_a_ticker_nobody_else_holds(monkeypatch):
     rid = forward.start_round(conn, config, days=7)
     ronin_id = _agent_id(conn, "RONIN")
 
-    def fake_decide(view, tick, total_days, goal_pct, guidelines, model=None):
+    def fake_decide(view, tick, guidelines, brief=None, model=None):
         if model == forward._RONIN_MODEL:
             return ([{"ticker": "FREESTOCK", "side": "buy", "qty": 5, "reason": "t"}], "", "", [])
         return ([], "", "", [])
@@ -92,7 +92,7 @@ def test_snapshot_is_taken_before_this_ticks_own_trades_avoiding_order_bias(monk
     config = ArenaConfig()
     rid = forward.start_round(conn, config, days=7)
 
-    def fake_decide(view, tick, total_days, goal_pct, guidelines, model=None):
+    def fake_decide(view, tick, guidelines, brief=None, model=None):
         assert "rival_held_tickers" not in view and "rival_recent_moves" not in view
         return ([{"ticker": "SHARED", "side": "buy", "qty": 1, "reason": "t"}], "", "", [])
 
