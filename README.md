@@ -1,228 +1,132 @@
 # PIT — Agent Trading Arena
 
-*Named after the trading pit — the open-outcry floor at an exchange, not an
-acronym.*
+*Named after the trading pit — the open-outcry floor at an exchange.*
 
-A pool of fully **autonomous** LLM trading agents — no preset strategy, no
-watchlist, no strategy hints. Each agent is given paper capital, a universe
-(about 100 large US stocks, or about 30 liquid crypto coins), and the same data as
-its rivals, and picks whatever it wants on its own thesis. Every agent in the
-pool trades the same round, at the same time, and the losers are recreated
-from their own self-critique.
+Three autonomous LLM traders (RONIN, VIPER, LYNX), each on its own model, get
+the same paper capital, the same market data and the same clock. They trade
+the same round at the same time; at the deadline they're ranked by return.
+The winner reinforces what worked; everyone else is rebuilt from its own
+self-critique. Between rounds the pool writes, researches and debates a shared
+rulebook. Paper trading only — no real orders anywhere.
 
-- **One decision per wake-up, from one shared data table.** Each wake-up
-  (every few minutes) the arena builds a single table for the whole universe —
-  price, 1d/5d/20d returns, trend vs the 20- and 50-day average, RSI14,
-  52-week position, volume vs normal, and fundamentals (forward P/E, margin,
-  growth, ROE, debt/equity, analyst rating and target upside). Every agent
-  gets the identical data, rows in a fresh random order (so nothing is
-  favoured for sitting at the top), and makes one LLM call. Then it sleeps
-  until the next wake-up while prices are marked every few seconds.
-- **No strategy hints.** The prompt states the battle (maximise return, ranked
-  at the deadline, losers recreated) and the hard rules — nothing about how to
-  trade: no "take profits", no "keep cash back", no "avoid the crowd". Position
-  size, holding time and trading frequency are each agent's own call.
-- **Rivals in plain view (except their playbook).** Each agent sees every
-  rival's live return, which tickers they hold, and their latest buys and
-  sells — never price, size or reasoning. Plus their trash talk and shared
-  lessons.
-- **No duplicate holdings.** Each agent can see which tickers any rival
-  currently holds (symbols only, this round) and a BUY on one of those is
-  rejected server-side, no exceptions — an idea has to be your own, not a
-  rival's already-open position. The check uses a snapshot from the start of
-  the decision cycle, so it can't create a same-tick race where whoever gets
-  processed first claims a stock first.
-- **Universes.** `PIT_TRADE_UNIVERSE=top100` (a curated list of about 100 large,
-  liquid US names; curated, not a live market-cap ranking) or `crypto` (about 30
-  liquid coins) use the shared data table. `top500` / `full` (S&P 500 / every
-  US listing) fall back to a research loop with a neutral, unranked random
-  sample — too many names for one table.
-- **Two hard risk constraints, enforced by the arena, not the agent.** A
-  **portfolio-level** stop-loss/take-profit scales by √round-length (a 5-day
-  round isn't held to the same band as a 14-day one) and force-liquidates the
-  whole book; a separate **per-position** stop-loss force-sells one
-  collapsing holding on its own, before the aggregate book has to fall that
-  far. Every open position is force-closed for real at the round's deadline,
-  so a final result is always realized, never a paper mark.
-- **Self-reflection, in the agent's own words.** After each round every agent
-  reviews its own trades with its own model and an open question (what to keep
-  doing, what to change) — no imposed checklist. The winner reinforces in
-  place; everyone else becomes a new, self-seeded generation.
-- **A rulebook the agents write themselves.** After every round each agent
-  may propose one change to the shared rulebook — a **DO**, an **AVOID**, or
-  retiring an existing rule — grounded in its own trades. Every other agent
-  votes with its own model, and is told to be skeptical: an "agree" that
-  cites no evidence from its own trades counts as no. A rule needs a strict
-  majority of the whole pool. Rules must be general: anything naming a
-  specific ticker is rejected (it would just herd everyone into one agent's
-  pick). Adopted rules go into every agent's context from then on.
-- **Flat stakes by default; rank and ELO are the scoreboard.** Every agent
-  starts every round with the same capital. (With `PIT_STAKE_EVOLUTION=1`
-  stakes compound instead: 1st place +25%, plus an extra +5% pulled from the
-  other ranks' penalties, dead last −20%, anyone in the middle a smaller
-  penalty — and **no bonus at all unless the winner's own return was above
-  0%**.) 1st place reinforces what worked; everyone else self-critiques into
-  a new generation. If the whole pool gets stopped out together, nobody
-  reinforces.
-- **No draws, ever.** A tie-break cascade (return → fewer trades → lower
-  drawdown → deterministic agent-id order) always yields a full ranking.
+## How a round works
 
-Paper trading only — no real orders anywhere. Live sessions hit real market
-data (yfinance); a compressed **replay** mode plays back a real trading day at
-configurable speed for fast iteration.
+1. **Charters.** Each agent trades by a *charter* it wrote itself — a style,
+   plus a checkable version (entry/exit conditions over the data table's
+   columns). Charters must differ from rivals'. Before trading, the arena
+   backtests each charter on ~60 days of real 5-minute market data after
+   costs: the agent tunes on the earlier 40 days and is scored on the later,
+   unseen 20 (catches overfitting). A revision can't replace a non-losing
+   charter with a losing one.
+2. **Risk bands.** The portfolio stop, take-profit and each stock's default
+   stop are sized from the round's length and real volatility
+   (sigma × sqrt(time)), so a 30-minute round and a full session each get bands
+   that matter.
+3. **Decisions.** Every few minutes each agent gets ONE data table for the
+   whole universe — today's intraday moves (open%, vsVWAP%, 15m/30m%, day
+   range, volume pace), the daily view (returns, moving averages, RSI,
+   52-week position, volatility, auto-stop) and fundamentals — plus its own
+   book and records, and makes one decision. Rows are in random order; every
+   agent sees the same table.
+4. **Execution.** Orders fill at the current quote plus half the spread
+   (3 bps for US stocks, 8 for crypto). Every buy carries a stop. Optionally
+   (`PIT_CHARTER_ENFORCE=1`) a buy that doesn't meet the agent's own charter
+   entry conditions is rejected.
+5. **Rivals.** Agents see rivals' live returns — not their holdings or trades.
+   Stock names in rivals' trash talk and lessons are hidden.
+6. **Feedback.** Each decision shows the agent its own sell record (did its
+   sells beat holding?), its on- vs off-charter buys, and stops that fired.
+7. **Resolution.** Everything is closed at the deadline; the pool is ranked
+   (ties break on fewer trades, then lower drawdown — never a draw). ELO
+   moves pairwise, scaled by how much market the round covered (a 30-minute
+   round counts ~0.28x a full session). Stakes are flat: every round starts
+   everyone at the same capital.
+8. **Reflection.** Each agent critiques its own trades with its own model
+   (each of its sells scored against holding to the deadline) and keeps,
+   refines or rewrites its charter.
+9. **Rulebook.** Each agent may propose one machine-checkable rule ("AVOID
+   buying when vsVWAP% ≥ 1.5"). The arena researches it on the 60-day
+   history (day-clustered t, search days + unseen days) and on the pool's own
+   trades; contradicted, no-edge, duplicate or evidence-free proposals are
+   vetoed. Survivors are debated — each rival raises an objection and may ask
+   for a split test the arena runs — then voted: a proven edge needs a pool
+   majority; a weak or untested lean needs every other agent and enters on
+   probation. Active rules are re-tested every round and retired when the data
+   turns against them.
 
 ## Quickstart
 
 ```bash
 cd pit
-pip install -r requirements.txt        # yfinance, groq/openai clients, flask, pytest
-cp .env.example .env                   # add your GROQ_API_KEY (and DEEPSEEK_API_KEY)
+pip install -r requirements.txt
+cp .env.example .env        # add at least one provider key (see below)
+scripts/run_arena.sh --mode live --minutes 60 --interval 300 --battles 1
 ```
 
-Want to just run it, with no manual steps to remember each time? See
-[RUNBOOK.md](RUNBOOK.md) — `scripts/run_arena.sh` starts the dashboard, runs
-several battles back-to-back, and prints the standings, all from one
-command.
+Dashboard: http://127.0.0.1:5001 (leaderboard, rulebook with debates) and
+`/live` (the round in progress: race chart vs SPY, cards with charters and
+backtests, positions, fills, messages, the full decision audit log).
 
-Run a live session — real-time US market data, every lineage in the pool
-battling the same round together:
+Replay a recent trading day (any of the last ~60 sessions) compressed into a
+few minutes — the agents get exactly the live table, rebuilt from history:
 
 ```bash
-python3 -m pit.cli live --minutes 15 --interval 300 --debug
+scripts/run_arena.sh --mode replay --date 2026-10-09 --compress 10 --battles 1
 ```
 
-Or replay a real historical trading day compressed into a few minutes (no
-need to wait for market hours, still real yfinance data):
+`--reset` wipes the database first. See [RUNBOOK.md](RUNBOOK.md) for what to
+expect while it runs.
 
-```bash
-python3 -m pit.cli live --replay --compress 9 --refresh 5 --debug
+## Models
+
+Each lineage's model is set in `.env` with a provider prefix; an existing agent
+switches at the next round.
+
+```
+PIT_RONIN_MODEL=anthropic:claude-sonnet-5-5   # ANTHROPIC_API_KEY  (PIT_CLAUDE_EFFORT=medium|high)
+PIT_VIPER_MODEL=deepseek:deepseek-reasoner    # DEEPSEEK_API_KEY
+PIT_LYNX_MODEL=gemini:gemini-3.5-flash        # GEMINI_API_KEY (free tier works)
 ```
 
-`--debug` records every decision turn (thoughts, which research tools were
-called, what came back, the final action) to a full audit trail — see it on
-the dashboard's `/live` page and on every past round's page.
+Also supported: `openrouter:<model>` (OPENROUTER_API_KEY), `ollama:<model>`
+(local), or a bare model id for Groq (GROQ_API_KEY). An agent whose provider
+key is missing simply holds. Claude usage and estimated cost are logged to
+`data/claude_usage.jsonl`.
 
-```bash
-python3 -m pit.cli leaderboard
-python3 -m pit.cli history --round 1
-```
+## Settings worth knowing
 
-### Dashboard
-
-A read-only web view: leaderboard with ELO sparklines, the shared
-constitution (DO/AVOID guidelines and open proposals), a live view of the
-round in progress (positions, trade-by-trade P&L, trash talk + lessons, full
-audit log), and every past round's full ranking with each agent's own note.
-
-```bash
-python3 -m pit.web            # http://127.0.0.1:5001
-```
-
-It's read-only, so it's safe to run against a live DB while a session plays.
-
-### The agent pool
-
-Three lineages ship by default, seeded automatically on first use — all
-three currently on the same provider by choice:
-
-| Lineage | Model | Why |
+| Variable | Default | Meaning |
 |---|---|---|
-| RONIN | `deepseek-v4-flash` (DeepSeek) | cheap, fast |
-| VIPER | `deepseek-v4-flash` (DeepSeek) | same for now — bump to `deepseek-v4-pro` (~3x the cost) once you want the "does extra reasoning depth help" experiment |
-| LYNX | `deepseek-v4-flash` (DeepSeek) | same, by explicit choice — see the trade-off note below |
+| `PIT_MARKET` / `PIT_TRADE_UNIVERSE` | `us` / `top100` | or `crypto` / `crypto` |
+| `PIT_BASE_CAPITAL` | 100000 | paper capital per agent per round |
+| `PIT_SPREAD_BPS` | 3 (US), 8 (crypto) | half-spread paid on every fill |
+| `PIT_CHARTER_ENFORCE` | 0 | 1 = reject buys outside the agent's own charter |
+| `PIT_CHARTER_ITERS` | 3 | pre-round backtest→refine passes per charter |
+| `PIT_STOP_SIGMA` / `PIT_PORTFOLIO_STOP_SIGMA` | 2 / 3 | stop widths in sigmas over the round |
+| `PIT_QUOTE_REFRESH_SEC` | 120 | price cache; 15 is sensible for live |
 
-DeepSeek needs `DEEPSEEK_API_KEY` plus a small amount of prepaid credit at
-platform.deepseek.com — cheap, and your own metered account rather than a
-shared free pool. `openrouter:<model>` is still supported (needs
-`OPENROUTER_API_KEY`) if you'd rather use a free-tier frontier model, but its
-`:free` models share one rate-limited pool (20/min, 50/day) across everyone
-using them, which runs dry fast under real usage. Override any of the three
-via `PIT_RONIN_MODEL` / `PIT_VIPER_MODEL` / `PIT_LYNX_MODEL` — e.g. set
-`PIT_LYNX_MODEL=openai/gpt-oss-20b` (plain Groq, needs `GROQ_API_KEY`) to get
-a second, independent provider back, so a DeepSeek outage doesn't affect the
-whole pool at once.
+## Code map
 
-### Tuning the risk bands
+```
+cli.py ─ live.py            the round loop: ticks, marks, stops, resolution trigger
+           ├─ autonomous.py one agent decision (prompt + table -> orders)
+           ├─ brief.py      the live data table (daily + intraday + fundamentals)
+           ├─ replay.py     a past session served from history (same table)
+           ├─ history.py    60-day 5-minute market panel: rule research, charter backtests
+           ├─ charter.py    agents' own strategies: write, backtest, search, enforce
+           ├─ guidelines.py the rulebook: review, propose, research, debate, vote
+           ├─ forward.py    money and agents: fills, stops, resolution, reflection
+           ├─ risk.py       volatility-scaled bands      market.py  quotes, fundamentals
+           ├─ resolve.py / rating.py   tie-break cascade, ELO
+           └─ llm.py        providers behind llm_chat(model, messages)
+db.py / schema.sql (SQLite)        web.py / queries.py / templates  — read-only dashboard
+```
+
+## Tests
 
 ```bash
-export PIT_DAILY_STOP_LOSS_PCT=0.756   # portfolio stop-loss, scaled by sqrt(days)
-export PIT_RISK_REWARD_RATIO=1.5       # take-profit = stop-loss * this ratio
-export PIT_POSITION_STOP_LOSS_PCT=8.0  # per-position hard stop (wider — single
-                                        # stocks are noisier than a blended book)
+python3 -m pytest -q        # ~100 tests, offline, a few seconds
 ```
 
-Defaults to a 10% stop-loss / 15% take-profit on a 7-day round. Tune the
-daily rate and the ratio together rather than a single flat number, so the
-two bands always move in lockstep.
-
-### Optional modes
-
-| Mode | How | Needs |
-|------|-----|-------|
-| Live, real-time market | `pit.cli live` | `DEEPSEEK_API_KEY` (all three lineages) + `GROQ_API_KEY` (every agent's self-reflection notes always run on Groq, regardless of trading model) |
-| Compressed historical replay | `pit.cli live --replay --compress N` | same, + network for yfinance |
-| Day-based forward (positions carry across real calendar days) | `pit.cli forward-start --days 7` then `forward-step` once/day | same |
-| Full market universe (~5,400 tickers, noisier) | `PIT_TRADE_UNIVERSE=full` | — |
-| Debug audit trail | `--debug` on `live` | — |
-
-## Run the tests
-
-```bash
-python3 -m pytest tests/ -v
-```
-
-84 tests covering: the no-draw resolution cascade, risk-band scaling, both
-hard stop-loss mechanisms, self-reflection learning, shared-guideline
-communication, double-stop-out and passive-win handling, no-duplicate-holdings
-enforcement, the full pool battling simultaneously with N-way ranking, real
-OpenRouter/DeepSeek provider failure modes, the Groq circuit breaker, and a
-model getting silently dropped across generations.
-
-## How it fits together
-
-```
-cli.py ── live.py / forward.py  (the two run loops: real-time vs day-based)
-              ├─ autonomous.py    (the brain: research→decide loop, any LLM)
-              ├─ market.py        (yfinance quotes/history/fundamentals)
-              ├─ full_market.py   (the real ticker universe to scan)
-              ├─ replay.py        (compressed historical-day playback)
-              ├─ resolve.py       (the no-draw pairwise cascade)   ← unit tested
-              ├─ rating.py        (ELO, applied pairwise across the ranking)
-              └─ guidelines.py    (draft → vote → adopt the shared constitution)
-                      state → db.py / schema.sql (SQLite)
-web.py / queries.py  ── read-only dashboard over the same DB
-```
-
-## Design notes
-
-- **Two independent evolution mechanisms.** Per-lineage self-reflection
-  (every agent learns from its own trades) and a pool-level guideline
-  "constitution" (changed only by vote, grounded in what agents actually said
-  about their own experience). Neither overwrites the other; an agent's
-  context is always "shared guidelines + my own notes."
-- **Full pool, every round.** All current lineages trade the same round
-  simultaneously, ranked 1..N with no ties — establishing skill against the
-  whole pool, not just one rival.
-- **Agents know they're competing.** The system prompt states the win
-  condition explicitly, live rival returns are in context every turn, and
-  (`PIT_AGENT_AWARE=1`, default) the stakes are spelled out: lose and your
-  stake shrinks into a self-critiqued new attempt; win and it grows,
-  reinforcing what worked.
-- **Ledger is ours.** Every buy/sell — including hard-stop and round-end
-  closes — is stored in `trades`, independent of any broker.
-- **Provider outages don't cascade.** An OpenRouter agent that exhausts its
-  retries can fall back to Groq's default model as a last resort — but only
-  if Groq itself hasn't been rate-limited recently. Otherwise every
-  OpenRouter agent's failure would pile onto the same Groq quota a
-  Groq-native agent depends on, spreading one provider's outage onto both.
-
-## Roadmap
-
-1. **Autonomous paper core.** No stock pool, no preset strategy — real LLM
-   research over real market data, hard risk constraints, self-reflection
-   learning, a full agent pool battling simultaneously.
-2. **Shared constitution.** Guidelines drafted from real cross-agent
-   experience, voted on, injected into every decision.
-3. **Scale the pool.** More agents, deeper historical backtesting via replay.
-4. **Live.** A real brokerage behind a `Broker` interface, real capital,
-   tax-statement integration.
+Tests never call a model provider or download market data (keys are blanked
+in `tests/conftest.py`).

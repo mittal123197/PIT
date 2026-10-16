@@ -126,13 +126,24 @@ set -a
 source .env
 set +a
 
+# each agent's model needs its own provider's key (llm.llm_available)
 missing=()
-[[ -z "${GROQ_API_KEY:-}" ]] && missing+=("GROQ_API_KEY (needed by LYNX, and by every agent's self-reflection notes)")
-[[ -z "${DEEPSEEK_API_KEY:-}" ]] && missing+=("DEEPSEEK_API_KEY (needed by RONIN/VIPER by default)")
+for var in PIT_RONIN_MODEL PIT_VIPER_MODEL PIT_LYNX_MODEL; do
+  model="${!var:-}"
+  case "$model" in
+    anthropic:*)  key=ANTHROPIC_API_KEY ;;
+    gemini:*)     key=GEMINI_API_KEY ;;
+    deepseek:*)   key=DEEPSEEK_API_KEY ;;
+    openrouter:*) key=OPENROUTER_API_KEY ;;
+    ollama:*)     key="" ;;
+    *)            key=GROQ_API_KEY ;;
+  esac
+  [[ -n "$key" && -z "${!key:-}" ]] && missing+=("$key (for ${var#PIT_} = ${model:-default})")
+done
 if [[ ${#missing[@]} -gt 0 ]]; then
   log "⚠️  Missing from .env:"
   for m in "${missing[@]}"; do log "   - $m"; done
-  log "   Continuing anyway — those agents will fail their decisions until it's set."
+  log "   Continuing anyway — those agents will hold until it's set."
 fi
 
 # ---- optional risk-band overrides for this run only ----

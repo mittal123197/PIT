@@ -12,17 +12,11 @@ pip install -r requirements.txt
 cp .env.example .env       # then fill in the keys below
 ```
 
-Edit `.env` and set:
-
-| Key | Needed for | Get it from |
-|---|---|---|
-| `GROQ_API_KEY` | LYNX's decisions, and every agent's self-reflection notes | console.groq.com (free) |
-| `DEEPSEEK_API_KEY` | RONIN/VIPER's decisions (default provider) | platform.deepseek.com (paid — cheap, needs a small prepaid balance) |
-| `OPENROUTER_API_KEY` | only if you switch `PIT_RONIN_MODEL`/`PIT_VIPER_MODEL` to `openrouter:...` | openrouter.ai (free tier available, but rate-limited — see "Common issues" below) |
-
-You don't strictly need all three — the arena runs with whatever's
-configured, and agents missing a working key will just fail their decisions
-until it's set (the script warns about this, it doesn't block you).
+Edit `.env`: set each lineage's model (`PIT_RONIN_MODEL`, `PIT_VIPER_MODEL`,
+`PIT_LYNX_MODEL`, provider-prefixed — e.g. `anthropic:claude-sonnet-5-5`,
+`deepseek:deepseek-reasoner`, `gemini:gemini-3.5-flash`) and the API key for
+each provider you use (`ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`,
+`GEMINI_API_KEY`, ...). An agent whose key is missing simply holds.
 
 ## The one command you actually need
 
@@ -47,7 +41,7 @@ thought and did, turn by turn.
 ## Common variations
 
 ```bash
-# Fresh pool, fresh stakes, 5 quick battles
+# Fresh pool, 5 quick battles
 scripts/run_arena.sh --reset --battles 5 --compress 5
 
 # One real-time battle (only works during US market hours, 9:30am–4pm ET)

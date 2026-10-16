@@ -28,50 +28,31 @@ separate database.
 fly deploy
 ```
 
-That builds the `Dockerfile`, ships it, and boots one always-on Machine. When it
-finishes:
+That builds the `Dockerfile` and boots one Machine serving the read-only
+dashboard (`python -m pit.serve`). When it finishes:
 
 ```bash
-fly open          # opens https://<app>.fly.dev — the live dashboard
-fly logs          # watch the arena daemon run rounds
+fly open          # https://<app>.fly.dev — the dashboard
 ```
 
-## Optional: LLM agents in the cloud
-
-The default deploy runs the fast, free, deterministic agents. To let Groq drive
-them, set the key as a secret and flip the flag:
+Battles are run separately against the same SQLite file — e.g. locally with
+`scripts/run_arena.sh`, then copy `data/pit.db` to the volume, or run the
+arena on the Machine itself:
 
 ```bash
-fly secrets set GROQ_API_KEY=gsk_...      # stored encrypted, not in the image
-fly deploy   # after uncommenting PIT_USE_LLM="1" in fly.toml [env]
+fly secrets set ANTHROPIC_API_KEY=... DEEPSEEK_API_KEY=... GEMINI_API_KEY=...
+fly ssh console -C "python -m pit.cli live --minutes 60 --interval 300"
 ```
 
-Keep `PIT_ROUND_INTERVAL` generous (e.g. 3600) and `PIT_BARS` small (e.g. 24)
-for LLM runs — every agent wake is an API call.
+## Settings (`fly.toml [env]` or `fly secrets`)
 
-## Tuning knobs (`fly.toml [env]` or `fly secrets`)
-
-| Var | Meaning | Default |
-|-----|---------|---------|
-| `PIT_ROUND_INTERVAL` | seconds between rounds | 300 |
-| `PIT_BARS` | synthetic feed length per round | 120 |
-| `PIT_USE_LLM` | `1` = Groq agents (needs `GROQ_API_KEY`) | 0 |
-| `PIT_DAEMON` | `0` = dashboard only, no auto rounds | 1 |
-| `PIT_DB_PATH` | SQLite path (points at the volume) | `/data/pit.db` |
+Same variables as `.env.example` (models, keys, market, `PIT_BASE_CAPITAL`,
+`PIT_CHARTER_ENFORCE`), plus `PIT_DB_PATH` (`/data/pit.db`, on the volume).
 
 ## Backups
 
 The volume is a single point of failure. To pull a copy of the DB down:
 
 ```bash
-fly ssh console -C "cat /data/pit.db" > backup-$(date +%F).db   # small DBs
+fly ssh sftp get /data/pit.db
 ```
-
-For anything bigger, `fly ssh sftp get /data/pit.db`.
-
-## Notes
-
-- `auto_stop_machines = false` keeps the Machine resident so the arena loop never
-  pauses — this is the whole point vs. free tiers that sleep on idle.
-- A local run uses the same code: `python3 -m pit.serve` (dashboard on :8080,
-  daemon in a thread). Only the deploy target differs.
