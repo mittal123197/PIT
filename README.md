@@ -85,7 +85,7 @@ switches at the next round.
 ```
 PIT_RONIN_MODEL=anthropic:claude-sonnet-5-5   # ANTHROPIC_API_KEY  (PIT_CLAUDE_EFFORT=medium|high)
 PIT_VIPER_MODEL=deepseek:deepseek-reasoner    # DEEPSEEK_API_KEY
-PIT_LYNX_MODEL=deepseek:deepseek-chat
+PIT_LYNX_MODEL=deepseek:deepseek-chat        # DEEPSEEK_API_KEY (gemini:… needs a billed key)
 ```
 
 Also supported: `openrouter:<model>` (OPENROUTER_API_KEY), `ollama:<model>`
