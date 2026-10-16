@@ -485,8 +485,16 @@ def _resolve(conn, rnd, config, price) -> dict:
     # update (K scaled down by the number of pairs, so a round with more
     # participants doesn't move ratings proportionally further). Deltas are
     # summed and applied once per agent at the end.
+    # Rating impact scales with how much market the round covered: a 30-minute
+    # round (typical move ~±0.4%) is mostly noise and moves ratings ~sqrt(30/
+    # 390) ≈ 0.28x as far as a full session; a replay or day+ round counts fully.
+    try:
+        length = float(rnd["length_min"] or 0)
+    except (KeyError, IndexError, TypeError):
+        length = 0.0
+    k_round = config.elo_k * (min(1.0, math.sqrt(length / 390)) if length > 0 else 1.0)
     n_pairs = len(ranking) * (len(ranking) - 1) // 2
-    k_per_pair = config.elo_k / max(1, n_pairs)
+    k_per_pair = k_round / max(1, n_pairs)
     net_delta = {aid: 0.0 for aid in ranking}
     for i, hi in enumerate(ranking):
         for lo in ranking[i + 1:]:

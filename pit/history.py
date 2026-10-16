@@ -9,6 +9,10 @@ dayRange%, volPace + the daily view: 1d/5d/20d%, vs20/50dMA%, RSI14,
 over the next 30 / 60 minutes. ~450k snapshots, so a rule or a charter can be
 tested on thousands of real market moments before anyone trades on it.
 
+Known biases, both small for this use: the universe is TODAY's top-100 list
+(survivorship), and fundamentals are today's values (they barely move in 60
+days). Daily columns use only closes before each bar's day — no lookahead.
+
 Cached on disk for the day (Yahoo serves 60 days of 5-minute bars). Daily
 features use only closes BEFORE the bar's day plus the bar's own price; RSI14
 uses prior closes only (an approximation of the live column).
@@ -244,7 +248,7 @@ def research_rule(spec: dict, practice: str, df: pd.DataFrame | None = None) -> 
         mm = m.loc[idx]
         if mm.sum() >= 3 and (~mm).sum() >= 3:
             xs = x.loc[idx]
-            daily.append(sign * (xs[mm].mean() - xs[~mm].mean()))
+            daily.append((d, sign * (xs[mm].mean() - xs[~mm].mean())))
     xm, xo = x[m], x[~m]
     ev = {"source": "history", "unit": "market snapshots",
           "n_match": int(m.sum()), "n_other": int((~m).sum()), "days": len(daily),
@@ -254,12 +258,24 @@ def research_rule(spec: dict, practice: str, df: pd.DataFrame | None = None) -> 
     if len(daily) < MIN_DAYS:
         ev.update(t=None, verdict="untested")
         return ev
-    arr = np.array(daily)
+    arr = np.array([e for _, e in daily])
     se = arr.std(ddof=1) / np.sqrt(len(arr)) or 1e-9
     t = round(float(arr.mean() / se), 2)
-    ev.update(t=t, edge_per_day=round(float(arr.mean()), 3),
-              verdict="supported" if t >= T_SUPPORT else "contradicted" if t <= -T_CONTRA
-              else "inconclusive")
+    # Out-of-sample check: many rules get tested, so t >= 2 alone passes some
+    # by luck. "Supported" also needs the edge on the earlier (search) days to
+    # be significant AND not to reverse on the later, unseen days.
+    days_sorted = sorted(d for d, _ in daily)
+    cut = days_sorted[int(len(days_sorted) * 2 / 3)]
+    early = np.array([e for d, e in daily if d < cut])
+    late = np.array([e for d, e in daily if d >= cut])
+    t_early = (round(float(early.mean() / (early.std(ddof=1) / np.sqrt(len(early)) or 1e-9)), 2)
+               if len(early) >= 5 else None)
+    late_mean = round(float(late.mean()), 3) if len(late) else None
+    holds_up = late_mean is not None and late_mean > 0
+    verdict = ("supported" if t >= T_SUPPORT and (t_early or 0) >= T_SUPPORT and holds_up
+               else "contradicted" if t <= -T_CONTRA else "inconclusive")
+    ev.update(t=t, t_search=t_early, unseen_edge=late_mean,
+              edge_per_day=round(float(arr.mean()), 3), verdict=verdict)
     return ev
 
 

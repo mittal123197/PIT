@@ -93,6 +93,9 @@ _COLUMN_ADDITIONS = [
     ("rounds", "end_prices", "TEXT"),
     # the case / objections / split tests / rebuttal behind each vote
     ("guideline_proposals", "debate", "TEXT"),
+    # market minutes the round covered (a replay covers a whole session) —
+    # scales how far one round may move ratings
+    ("rounds", "length_min", "REAL"),
 ]
 
 

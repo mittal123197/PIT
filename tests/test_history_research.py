@@ -40,3 +40,20 @@ def test_charter_that_never_triggers_says_so():
     card = history.backtest_charter({"entry": [["vsVWAP%", "<", -99]], "exit": [],
                                      "max_hold_min": 30}, df)
     assert card["trades"] == 0 and card["verdict"] == "never triggers"
+
+
+def test_rule_that_reverses_on_unseen_days_is_not_supported():
+    """Strong edge on the first 2/3 of days, reversed on the last 1/3 —
+    the out-of-sample check must stop it from counting as supported."""
+    rng = np.random.default_rng(1)
+    rows = []
+    for d in range(30):
+        edge = 0.4 if d < 20 else -0.4
+        for s in range(8):
+            for bar in range(0, 72):
+                vw = rng.normal(0, 1)
+                rows.append({"sym": f"S{s}", "day": d, "bar": bar, "px": 100.0, "vwap": vw,
+                             "f30": rng.normal(edge if vw < -1 else 0, 0.2), "rsi": 50.0})
+    ev = history.research_rule(g.parse_spec([["vsVWAP%", "<", -1]]), "good", pd.DataFrame(rows))
+    assert ev["t_search"] >= 2 and ev["unseen_edge"] < 0
+    assert ev["verdict"] != "supported"

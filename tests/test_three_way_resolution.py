@@ -154,3 +154,18 @@ def test_elo_pairwise_zero_sum_across_the_pool(monkeypatch):
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_short_rounds_move_ratings_less_than_full_sessions(monkeypatch):
+    gains = {}
+    for minutes in (30, 390):
+        conn = _fresh_conn()
+        config = ArenaConfig()
+        rnd, ids = _three_way_round(conn, config, {"RONIN": 5.0, "VIPER": 1.0, "LYNX": -3.0})
+        conn.execute("UPDATE rounds SET length_min=? WHERE id=?", (minutes, rnd["id"]))
+        rnd = dict(conn.execute("SELECT * FROM rounds WHERE id=?", (rnd["id"],)).fetchone())
+        forward._resolve(conn, rnd, config, lambda t: 100.0)
+        gains[minutes] = conn.execute(
+            "SELECT rating_delta FROM round_rankings WHERE round_id=? AND rank=1",
+            (rnd["id"],)).fetchone()[0]
+    assert abs(gains[30] / gains[390] - (30 / 390) ** 0.5) < 0.02

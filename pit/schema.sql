@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS rounds (
     sigma_pct      REAL,                 -- expected 1-sigma move over the round
     auto_stops     TEXT,                 -- {symbol: default position stop %}
     replay_anchor  TEXT,                 -- replay clock (JSON), see live.run_live
+    length_min     REAL,                 -- market minutes covered (scales ELO)
     end_prices     TEXT                  -- {symbol: deadline price} for exit-rule backtests
 );
 

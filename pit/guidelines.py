@@ -447,9 +447,15 @@ def evidence_label(ev: dict | None) -> str:
         lg = ev.get("ledger") or {}
         own = (f"; pool's own trades: {lg.get('verdict')} ({lg.get('n_match')} matching {lg.get('unit', 'buys')})"
                if lg else "")
+        oos = ""
+        if ev.get("t_search") is not None and ev.get("unseen_edge") is not None:
+            oos = (f"; search days t={ev['t_search']:+.2f}, unseen days "
+                   f"{'held up' if ev['unseen_edge'] > 0 else 'reversed'} "
+                   f"({ev['unseen_edge']:+.3f}%/day)")
         return (f"{ev['verdict']} — 60-day market research: {ev['n_match']:,} matching snapshots "
                 f"avg {ev['avg_match']:+.3f}% next 30m (win {ev['win_rate_match']}%) vs "
-                f"{ev['avg_other']:+.3f}% otherwise, t={ev['t']:+.2f} over {ev['days']} days" + own)
+                f"{ev['avg_other']:+.3f}% otherwise, t={ev['t']:+.2f} over {ev['days']} days"
+                + oos + own)
     if ev["verdict"] == "untested":
         return (f"untested — {ev['n_match']} matching / {ev['n_other']} other {ev.get('unit', 'buys')} "
                 f"across {ev.get('rounds', '?')} round(s); need {_min_trades()} each "

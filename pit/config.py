@@ -43,8 +43,9 @@ class ArenaConfig:
 
     # --- execution ---
     # Half the bid/ask spread, in basis points, paid on every fill (buys fill
-    # above the quote, sells below). Marks stay at the quote.
-    spread_bps: float = _env_float("PIT_SPREAD_BPS", 3.0)
+    # above the quote, sells below). Marks stay at the quote. ~3 bps is
+    # realistic for the largest US stocks; mid-cap crypto pairs are wider.
+    spread_bps: float = _env_float("PIT_SPREAD_BPS", 8.0 if MARKET == "crypto" else 3.0)
 
     # --- ranking ---
     # Returns within this many percentage points tie, and the tie-break moves

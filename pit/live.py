@@ -130,9 +130,10 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         "else is available): " + brief_mod._HEADER.replace("|", ", ")
         + " · plus a line with SPY/QQQ since the open and market breadth"), verbose)
     end = time.time() + minutes * 60
-    conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=? WHERE id=?",
+    market_minutes = (risk.minutes_per_day("us") if replay._STATE else minutes)
+    conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=?, length_min=? WHERE id=?",
                  (datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"),
-                  int(interval), _market_label(), rnd["id"]))
+                  int(interval), _market_label(), market_minutes, rnd["id"]))
     if replay._STATE and replay.anchor():
         conn.execute("UPDATE rounds SET replay_anchor=? WHERE id=?",
                      (json.dumps(replay.anchor()), rnd["id"]))
