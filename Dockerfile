@@ -16,5 +16,5 @@ ENV PIT_DB_PATH=/data/pit.db \
 VOLUME ["/data"]
 EXPOSE 8080
 
-# Starts the arena daemon (background thread) + serves the dashboard.
+# Serves the dashboard. Battles run separately (scripts/run_arena.sh).
 CMD ["python", "-m", "pit.serve"]

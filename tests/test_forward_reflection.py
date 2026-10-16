@@ -104,40 +104,25 @@ def test_fallback_reflection_never_mentions_the_opponent(monkeypatch):
     assert "LOSESYM" in outcome["mutation_note"]  # loser cites only its own symbol
 
 
-def test_reflection_pass_wired_into_forward_resolve(monkeypatch):
-    """The pool-wide guideline reflection used to only run from the legacy
-    engine; it must now fire from forward._resolve() too, every
-    reflection_interval rounds, once there's enough history to draw on."""
-    monkeypatch.setattr("pit.llm.groq_available", lambda: False)
-    conn = _fresh_conn()
-    config = ArenaConfig(reflection_interval=1, reflection_min_sample=1,
-                         reflection_pattern_frac=0.5)
-    # round 1: RONIN wins with fewer trades and lower drawdown than VIPER —
-    # a pattern draft_proposal's heuristics can detect on the very first round.
-    rid = forward.start_round(conn, config, days=7)
-    ronin_id = conn.execute(
-        "SELECT a.id FROM agents a JOIN lineages l ON l.id=a.lineage_id "
-        "WHERE l.name='RONIN'").fetchone()["id"]
-    viper_id = conn.execute(
-        "SELECT a.id FROM agents a JOIN lineages l ON l.id=a.lineage_id "
-        "WHERE l.name='VIPER'").fetchone()["id"]
-    conn.execute("UPDATE round_states SET current_capital=110000, trade_count=1 "
-                 "WHERE round_id=? AND agent_id=?", (rid, ronin_id))
-    conn.execute("UPDATE round_states SET current_capital=90000, trade_count=9 "
-                 "WHERE round_id=? AND agent_id=?", (rid, viper_id))
-    conn.commit()
-    rnd = dict(conn.execute("SELECT * FROM rounds WHERE id=?", (rid,)).fetchone())
-
-    outcome = forward._resolve(conn, rnd, config, lambda t: 100.0)
-    # A pattern was detected and put to a vote — the reflection pass reached
-    # forward._resolve() at all, which is the thing that used to be missing.
-    # With only 2 lineages, a winning one heuristically resists a new
-    # constraint (see guidelines._heuristic_vote), so a tie -> rejected is the
-    # CORRECT outcome here, not a bug — unanimity is required with a pool of 2.
-    assert outcome["reflection"] is not None
-    assert outcome["reflection"]["kind"] == "add"
-    proposals = conn.execute("SELECT COUNT(*) c FROM guideline_proposals").fetchone()["c"]
-    assert proposals == 1
+def test_rulebook_pass_runs_from_resolve_only_when_a_model_is_reachable(monkeypatch):
+    """The rulebook pass (guidelines.pool_constitution) fires from
+    forward._resolve() when at least one agent's model is configured, and is
+    skipped cleanly when none is — no offline heuristic stand-in."""
+    calls = []
+    monkeypatch.setattr("pit.guidelines.pool_constitution",
+                        lambda conn, config, rid: calls.append(rid) or
+                        [{"kind": "add", "text": "buy when RSI14 < 30", "accepted": False}])
+    for reachable in (False, True):
+        monkeypatch.setattr("pit.llm.llm_available", lambda model, r=reachable: r)
+        conn = _fresh_conn()
+        config = ArenaConfig(reflection_interval=1)
+        rid = forward.start_round(conn, config, days=7)
+        rnd = dict(conn.execute("SELECT * FROM rounds WHERE id=?", (rid,)).fetchone())
+        outcome = forward._resolve(conn, rnd, config, lambda t: 100.0)
+        if reachable:
+            assert calls == [rid] and outcome["reflection"]["kind"] == "add"
+        else:
+            assert calls == [] and outcome["reflection"] is None
 
 
 if __name__ == "__main__":

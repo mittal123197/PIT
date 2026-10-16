@@ -127,7 +127,6 @@
       <th>#</th><th>Agent</th><th>ELO</th><th class="hide-sm hide-md">Trend</th>
       <th class="hide-sm">Record</th><th class="hide-sm">Podium</th>
       <th>Avg / round</th><th title="average return above simply holding the market (SPY) over the same window — and how many rounds it beat the market">vs market</th><th class="hide-sm hide-md">Best round</th><th class="hide-sm">Gen</th>
-      {% if stake_evolution %}<th>Stake</th>{% endif %}
     </tr></thead>
     <tbody>
     {% for r in board %}
@@ -153,7 +152,6 @@
         <td class="mono" style="white-space:nowrap;">{% if r.alpha is not none %}<span class="{{ 'up' if r.alpha > -0.005 else 'down' }}">{{ r.alpha|pct }}</span> <span class="muted" style="font-size:11px;">{{ r.beat_mkt }}/{{ r.mkt_rounds }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="hide-sm hide-md mono {{ 'up' if (r.best_return or 0) > -0.005 else 'down' }}">{{ r.best_return|pct }}</td>
         <td class="hide-sm mono">{{ r.generation }}</td>
-        {% if stake_evolution %}<td class="mono">{{ r.current_stake|money }}</td>{% endif %}
       </tr>
     {% else %}
       <tr><td colspan="9" class="muted" style="padding:22px;">

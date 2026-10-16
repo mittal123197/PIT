@@ -17,7 +17,6 @@ import json
 import os
 import urllib.request
 
-from .config import _BUILTIN_UNIVERSE  # reference for the yfinance movers feed
 
 DATA_SOURCE = os.getenv("PIT_DATA_SOURCE", "yfinance").lower()
 # 'top500' (default) restricts full-market scans to S&P 500 constituents — a
@@ -32,10 +31,6 @@ def _use_alpaca() -> bool:
     return (DATA_SOURCE == "alpaca"
             and bool(os.getenv("ALPACA_API_KEY"))
             and bool(os.getenv("ALPACA_SECRET_KEY")))
-
-
-def _today_key() -> str:
-    return datetime.date.today().isoformat()
 
 
 def _bucket() -> str:
@@ -136,19 +131,6 @@ def _round_price(v) -> float:
     return round(float(v), 8)
 
 
-def movers(n: int = 12, reference: list[str] | None = None) -> dict:
-    if _use_alpaca():
-        m = _alpaca_movers(n)
-        if m and (m["gainers"] or m["losers"]):
-            return m
-    return _yf_movers(n, reference)
-
-
-def is_trading_day(date: datetime.date | None = None) -> bool:
-    date = date or datetime.date.today()
-    return date.weekday() < 5
-
-
 def scan_full_market(n: int = 20, sample_size: int | None = None,
                      seed: int | None = None) -> dict:
     """A NEUTRAL look at a random slice of the universe: `n` randomly chosen
@@ -220,22 +202,6 @@ def _alpaca_history(ticker: str, days: int) -> list[tuple[str, float]]:
         return []
 
 
-def _alpaca_movers(n: int) -> dict:
-    try:
-        d = _alpaca_get(f"/v1beta1/screener/stocks/movers?top={n}")
-
-        def conv(rows):
-            return [{"ticker": m["symbol"], "price": round(m.get("price", 0), 2),
-                     "change_pct": round(m.get("percent_change", 0), 2)}
-                    for m in rows]
-        return {"gainers": conv(d.get("gainers", [])),
-                "losers": conv(d.get("losers", []))}
-    except Exception:
-        return {"gainers": [], "losers": []}
-
-
-# ---- yfinance backend (free, delayed) ---------------------------------
-
 def _yf():
     import yfinance as yf
     return yf
@@ -301,37 +267,3 @@ def _extract_closes(df, tickers: list[str]) -> dict[str, tuple[float, float]]:
         except Exception:
             continue
     return out
-
-
-@functools.lru_cache(maxsize=8)
-def _movers_cached(day_key: str, ref: tuple[str, ...], n: int) -> tuple:
-    tickers = list(ref)
-    try:
-        df = _movers_download(tickers, "7d", "1d", 15)
-    except Exception:
-        return ((), ())
-    prices = _extract_closes(df, tickers)
-
-    # A bulk request this size routinely drops a handful to Yahoo's own
-    # throttling/timeouts, not real data gaps — retry just the misses once.
-    missing = [t for t in tickers if t not in prices]
-    if missing and len(missing) < len(tickers):
-        try:
-            retry_df = _movers_download(missing, "7d", "1d", 15)
-            prices.update(_extract_closes(retry_df, missing))
-        except Exception:
-            pass
-
-    rows = []
-    for t, (price, prev) in prices.items():
-        rows.append({"ticker": t, "price": _round_price(price),
-                     "change_pct": round((price / prev - 1) * 100, 2) if prev else 0.0})
-    rows.sort(key=lambda r: r["change_pct"], reverse=True)
-    return (tuple(rows[:n]), tuple(reversed(rows[-n:])))
-
-
-def _yf_movers(n: int = 12, reference: list[str] | None = None) -> dict:
-    ref = tuple(reference or _BUILTIN_UNIVERSE)
-    gainers, losers = _movers_cached(_bucket(), ref, n)
-    return {"gainers": [dict(r) for r in gainers],
-            "losers": [dict(r) for r in losers]}

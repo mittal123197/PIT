@@ -28,21 +28,8 @@ def _agent_id(conn, name):
         "WHERE l.name=?", (name,)).fetchone()["id"]
 
 
-def test_held_by_rivals_excludes_self_and_unions_everyone_else():
-    snapshot = {1: {"OWN"}, 2: {"BBB", "CCC"}, 3: {"EEE", "DDD"}}
-    assert forward._held_by_rivals(snapshot, 1) == ["BBB", "CCC", "DDD", "EEE"]
-    assert forward._held_by_rivals(snapshot, 2) == ["DDD", "EEE", "OWN"]
 
 
-def test_drop_blocked_buys_only_strips_matching_buys():
-    orders = [
-        {"side": "buy", "ticker": "AAA", "reason": "t"},
-        {"side": "buy", "ticker": "ZZZ", "reason": "t"},
-        {"side": "sell", "ticker": "AAA", "reason": "t"},  # sells never blocked
-    ]
-    clean, rejected = forward._drop_blocked_buys(orders, {"AAA"})
-    assert rejected == ["AAA"]
-    assert clean == [orders[1], orders[2]]
 
 
 def test_tick_allows_a_buy_on_a_ticker_a_rival_already_holds(monkeypatch):

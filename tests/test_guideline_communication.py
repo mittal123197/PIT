@@ -118,27 +118,6 @@ def test_rival_sees_last_round_lesson_at_the_start_of_the_next_round(monkeypatch
     assert any("RONIN" in m for m in seen)
 
 
-def test_experience_draft_is_grounded_in_both_lineages_notes():
-    """_recent_experience pulls each lineage's own self-reflection notes
-    (not the opponent's) — the raw material an LLM-based drafting pass would
-    "discuss" to find a shared lesson."""
-    conn = _fresh_conn()
-    config = ArenaConfig()
-    forward.ensure_autonomous_lineages(conn, config)
-    ronin_id = conn.execute(
-        "SELECT a.id FROM agents a JOIN lineages l ON l.id=a.lineage_id "
-        "WHERE l.name='RONIN'").fetchone()["id"]
-    import json
-    conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
-                 (json.dumps({"mode": "autonomous", "notes": "cut losers fast next time"}),
-                  ronin_id))
-    conn.commit()
-
-    exp = gmod._recent_experience(conn, per_lineage=3)
-    lineages_seen = {e["lineage"] for e in exp}
-    assert "RONIN" in lineages_seen
-    ronin_notes = next(e["notes"] for e in exp if e["lineage"] == "RONIN")
-    assert any("cut losers fast" in n["note"] for n in ronin_notes)
 
 
 if __name__ == "__main__":

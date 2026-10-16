@@ -19,18 +19,6 @@ def _trade(conn, rid, aid, side, sym, reason):
                  "VALUES (?,?,?,?,?,1,10,100,?)", (rid, aid, "2026-01-01 10:00:00", sym, side, reason))
 
 
-def test_moves_show_rivals_only_without_price_size_or_reason_and_skip_forced_closes():
-    conn, rid, ids = _setup()
-    _trade(conn, rid, ids["VIPER"], "buy", "AAA", "my secret thesis")
-    _trade(conn, rid, ids["LYNX"], "sell", "BBB", "taking profit")
-    _trade(conn, rid, ids["LYNX"], "sell", "CCC", "position stop-loss (entry 10.00, -8%)")
-    _trade(conn, rid, ids["VIPER"], "sell", "DDD", "round-end close")
-    _trade(conn, rid, ids["RONIN"], "buy", "EEE", "mine")           # self: excluded
-    conn.commit()
-    moves = forward._rival_recent_moves(conn, rid, ids["RONIN"])
-    assert {(m["rival"], m["side"], m["ticker"]) for m in moves} == {("VIPER", "buy", "AAA"), ("LYNX", "sell", "BBB")}
-    for m in moves:
-        assert set(m) == {"rival", "side", "ticker", "at"}           # no price/qty/reason leaked
 
 
 def test_scan_is_an_unranked_alphabetical_sample(monkeypatch):

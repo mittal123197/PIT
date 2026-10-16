@@ -79,7 +79,7 @@ def test_double_stopout_forces_reflection_regardless_of_interval(monkeypatch):
     monkeypatch.setattr("pit.llm.groq_available", lambda: False)
     conn = _fresh_conn()
     # a huge interval that would normally never fire on round 1
-    config = ArenaConfig(reflection_interval=50, reflection_min_sample=50)
+    config = ArenaConfig(reflection_interval=50)
     rnd, ids = _double_stopout_round(conn, config)
     forward._resolve(conn, rnd, config, lambda t: 100.0)
     # no LLM and no stats sample yet -> draft_proposal returns None, but the

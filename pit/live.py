@@ -109,24 +109,9 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         forward.start_round(conn, config, days=0)  # 0 = time-based; no day-resolve
         rnd = forward._active_round(conn)
     if verbose:
-        # Each lineage's actual starting capital this round is its evolved
-        # stake (round_states.starting_capital, set in forward.start_round
-        # from lineages.current_stake), not the fixed config.base_capital —
-        # that only applies to a lineage's very first-ever round. Printing
-        # base_capital here used to claim "$100,000 paper each" even once
-        # stakes had clearly diverged (a winner's grown, a loser's shrunk),
-        # which is the whole point of the stake mechanic — so show what's
-        # actually staked instead of a number that's wrong after round 1.
-        stakes = sorted(r["starting_capital"] for r in conn.execute(
-            "SELECT starting_capital FROM round_states WHERE round_id=?",
-            (rnd["id"],)).fetchall())
-        if stakes and min(stakes) != max(stakes):
-            stake_txt = f"{CURRENCY}{min(stakes):,.0f}–{CURRENCY}{max(stakes):,.0f} paper (evolved stakes)"
-        else:
-            stake_txt = f"{CURRENCY}{(stakes[0] if stakes else config.base_capital):,.0f} paper each"
         print(f"● LIVE — {MARKET.upper()} market, {minutes} min. Decisions every "
               f"{interval // 60} min, prices marked every {refresh}s. "
-              f"{stake_txt}. Watch /live.\n",
+              f"{CURRENCY}{config.base_capital:,.0f} paper each. Watch /live.\n",
               flush=True)
 
     if not replay._STATE and brief_mod.brief_mode(market.TRADE_UNIVERSE_MODE):
@@ -202,7 +187,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
             if verbose:
                 print(f"  [final mark error: {exc!r}]", flush=True)
 
-    # Resolve for real: winner/loser cascade, ELO, stake, and — the whole
+    # Resolve for real: winner/loser cascade, ELO, and — the whole
     # point of the arena — mutate the loser into its next generation from the
     # winner's trade log. Without this, a live session just stopped ('ended')
     # and never touched `lineages`/`round_results`, so wins/losses/generation
@@ -220,7 +205,7 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
                       f"merely less bad than the rest ({outcome['reason']})")
             elif outcome.get("passive_win"):
                 print(f"\n● ROUND RESOLVED — {outcome['winner']} wins {outcome['winner_return']:+.2f}% "
-                      f"on ZERO TRADES (capped stake bonus) ({outcome['reason']})")
+                      f"on ZERO TRADES ({outcome['reason']})")
             elif len(ranking) > 2:
                 print(f"\n● ROUND RESOLVED — {len(ranking)}-way ({outcome['reason']})")
             else:
@@ -437,9 +422,6 @@ def _tick_body(conn, config, rnd, tick, verbose, debug=False):
     price = _price_fn()
     states = {r["agent_id"]: dict(r) for r in conn.execute(
         "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
-    # snapshotted ONCE, before anyone this tick trades — see forward._held_by_rivals
-    holdings_snapshot = {aid: set(json.loads(st["holdings"]).keys())
-                        for aid, st in states.items()}
     guidelines = gmod.active_texts(conn)
     ts = forward.local_ts()
 

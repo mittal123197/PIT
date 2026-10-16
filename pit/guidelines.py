@@ -1,13 +1,20 @@
-"""The pool-level "constitution" — shared rules changed only by a vote.
+"""The pool's rulebook ("constitution"): shared rules the agents write, the
+arena researches, and the pool debates and votes on.
 
-A second evolution mechanism, independent of per-lineage mutation: every N
-rounds a *reflection* pass looks across recent rounds for a pattern that keeps
-recurring (never a one-off), drafts at most one proposal, and every lineage
-votes. A strict majority carries it; a tie keeps the status quo. Active
-guidelines are injected into every agent's context.
-
-The whole mechanism is deterministic and offline by default; if Groq is
-available the drafting/voting can be delegated to it (with fallback here).
+After each round (pool_constitution):
+  1. review   — every active rule is re-tested; contradicted / no-edge rules
+                are retired, probation rules with real support become proven.
+  2. propose  — each agent may propose one machine-checkable rule: an entry
+                ("buy when …") or exit ("sell when …") condition over the data
+                table's columns, or the removal of a rule.
+  3. research — the arena tests it on ~60 days of market history (pit/history)
+                first and on the pool's own trades second; contradicted, no
+                edge, duplicate or evidence-free proposals are vetoed here.
+  4. debate   — each other agent raises one objection (optionally a split
+                test the arena runs); the proposer rebuts or withdraws.
+  5. vote     — proven edge: pool majority; untested / weak lean: every other
+                agent, and it enters on probation. At most N adoptions a round.
+Active rules are shown to every agent at every decision.
 """
 from __future__ import annotations
 
@@ -52,230 +59,6 @@ def current_lineages(conn) -> list[dict]:
     ).fetchall()]
 
 
-def _recent_experience(conn, per_lineage: int) -> list[dict]:
-    """Both lineages' own self-reflection notes — what they actually SAID
-    they learned from their own trades (forward._reflect_winner/_loser),
-    newest generations first per lineage. This is the "agents communicate
-    about their own experience" raw material the reflection pass now drafts
-    guidelines from, instead of only inferring a pattern from trade-count/
-    drawdown numbers."""
-    rows = conn.execute(
-        """SELECT l.name AS lineage, a.generation,
-                  json_extract(a.strategy_config, '$.notes') AS notes,
-                  a.mutation_note
-           FROM agents a JOIN lineages l ON l.id = a.lineage_id
-           ORDER BY l.id, a.generation DESC"""
-    ).fetchall()
-    by_lineage: dict[str, list[dict]] = {}
-    for r in rows:
-        note = r["notes"] or r["mutation_note"]
-        if not note:
-            continue
-        by_lineage.setdefault(r["lineage"], [])
-        if len(by_lineage[r["lineage"]]) < per_lineage:
-            by_lineage[r["lineage"]].append(
-                {"generation": r["generation"], "note": note})
-    return [{"lineage": name, "notes": notes}
-            for name, notes in by_lineage.items() if notes]
-
-
-def _recent_stats(conn, limit: int) -> list[dict]:
-    """Per-round winner-vs-loser trade counts and drawdowns, newest first."""
-    return [dict(r) for r in conn.execute(
-        """SELECT r.round_number,
-                  ws.trade_count AS w_tc, ls.trade_count AS l_tc,
-                  ws.max_drawdown_pct AS w_dd, ls.max_drawdown_pct AS l_dd
-           FROM round_results rr
-           JOIN rounds r ON r.id = rr.round_id
-           JOIN round_states ws ON ws.round_id = rr.round_id
-                AND ws.agent_id = rr.winner_agent_id
-           JOIN round_states ls ON ls.round_id = rr.round_id
-                AND ls.agent_id = rr.loser_agent_id
-           ORDER BY r.round_number DESC LIMIT ?""",
-        (limit,),
-    ).fetchall()]
-
-
-# ---- drafting a proposal ----------------------------------------------
-
-# Each detectable pattern maps to a tag (so we don't re-propose a duplicate)
-# and the guideline text it would add.
-def draft_proposal(conn, config: ArenaConfig, use_llm: bool = False) -> dict | None:
-    """Return a proposal dict, or None if no recurring pattern is found.
-
-    dict shape: {"kind": "add"|"remove", "text": str, "tag": str,
-                 "guideline_id": int|None, "evidence": str}
-    """
-    if use_llm:
-        # Primary path: ground the proposal in what both agents actually said
-        # about their own trades, not just win/loss statistics.
-        experience = _recent_experience(conn, config.reflection_interval)
-        got = _llm_draft_from_experience(experience, active_texts(conn))
-        if got is not None:
-            return got
-        got = _llm_draft(conn, config)
-        if got is not None:
-            return got  # includes explicit None only via fallback below
-
-    # Offline/no-pattern-yet fallback: the older stats heuristic (winners'
-    # trade-count/drawdown vs losers'). Always tags practice="good" — both
-    # detectable patterns here describe something worth DOING, not avoiding.
-    sample = _recent_stats(conn, config.reflection_interval * 2)
-    if len(sample) < config.reflection_min_sample:
-        return None
-    n = len(sample)
-    frac = config.reflection_pattern_frac
-    active = {_tag_of(t): (gid, t) for gid, t in _active_tagged(conn)}
-
-    fewer = sum(1 for s in sample if s["w_tc"] < s["l_tc"]) / n
-    lower_dd = sum(1 for s in sample if s["w_dd"] < s["l_dd"]) / n
-
-    # ADD if a pattern holds and isn't already codified.
-    if fewer >= frac and "fewer_trades" not in active:
-        return {"kind": "add", "practice": "good", "tag": "fewer_trades",
-                "text": f"Prefer fewer, higher-conviction trades — winners "
-                        f"out-traded by fewer fills in {fewer*100:.0f}% of the "
-                        f"last {n} rounds.",
-                "guideline_id": None,
-                "evidence": f"fewer-trade winners {fewer*100:.0f}% of {n} rounds"}
-    if lower_dd >= frac and "low_drawdown" not in active:
-        return {"kind": "add", "practice": "good", "tag": "low_drawdown",
-                "text": f"Control drawdown tightly — winners held a smaller max "
-                        f"drawdown in {lower_dd*100:.0f}% of the last {n} rounds.",
-                "guideline_id": None,
-                "evidence": f"lower-drawdown winners {lower_dd*100:.0f}% of {n} rounds"}
-
-    # REMOVE if a codified pattern has clearly stopped holding.
-    if "fewer_trades" in active and fewer < (1 - frac):
-        gid, text = active["fewer_trades"]
-        return {"kind": "remove", "practice": "good", "tag": "fewer_trades", "text": text,
-                "guideline_id": gid,
-                "evidence": f"fewer-trade winners only {fewer*100:.0f}% lately"}
-    if "low_drawdown" in active and lower_dd < (1 - frac):
-        gid, text = active["low_drawdown"]
-        return {"kind": "remove", "practice": "good", "tag": "low_drawdown", "text": text,
-                "guideline_id": gid,
-                "evidence": f"lower-drawdown winners only {lower_dd*100:.0f}% lately"}
-    return None
-
-
-def _llm_draft_from_experience(experience: list[dict], active: list[str]) -> dict | None:
-    try:
-        from .llm import groq_available, llm_draft_guideline_from_experience
-        if not groq_available() or not experience:
-            return None
-        got = llm_draft_guideline_from_experience(experience, active)
-        if got is None or got.get("kind") not in ("add", "remove"):
-            return None
-        got.setdefault("tag", got.get("kind", "") + "_" + str(hash(got.get("text", "")))[:6])
-        return got
-    except Exception:
-        return None
-
-
-_TAG_KEYWORDS = {"fewer_trades": "fewer", "low_drawdown": "drawdown"}
-
-
-def _tag_of(text: str) -> str:
-    low = text.lower()
-    for tag, kw in _TAG_KEYWORDS.items():
-        if kw in low:
-            return tag
-    return "other"
-
-
-def _active_tagged(conn) -> list[tuple[int, str]]:
-    return [(g["id"], g["text"]) for g in active_guidelines(conn)]
-
-
-# ---- voting ------------------------------------------------------------
-
-def cast_votes(conn, proposal_id: int, proposal: dict, config: ArenaConfig,
-               use_llm: bool = False) -> None:
-    for lin in current_lineages(conn):
-        if use_llm:
-            vote, reason = _llm_vote(lin, proposal)
-        else:
-            vote, reason = _heuristic_vote(lin, proposal)
-        conn.execute(
-            """INSERT OR REPLACE INTO guideline_votes
-               (proposal_id, lineage_id, vote, reasoning, created_at)
-               VALUES (?,?,?,?,?)""",
-            (proposal_id, lin["id"], vote, reason, _now()),
-        )
-    conn.commit()
-
-
-def _heuristic_vote(lin: dict, proposal: dict) -> tuple[str, str]:
-    """A trailing lineage welcomes new guidance; a winning one resists it.
-
-    For a removal, invert: a confident (winning) lineage is happy to drop a
-    constraint, a struggling one wants to keep any help it has.
-    """
-    winning = lin["wins"] > lin["losses"]
-    if proposal["kind"] == "add":
-        if not winning:
-            return "agree", "trailing/level record — open to shared guidance"
-        return "disagree", "winning record — reluctant to add constraints"
-    else:  # remove
-        if winning:
-            return "agree", "winning — comfortable dropping the constraint"
-        return "disagree", "still struggling — keep the guidance for now"
-
-
-# ---- resolving ---------------------------------------------------------
-
-def open_and_resolve(conn, config: ArenaConfig, source_round_id: int | None,
-                     use_llm: bool = False) -> dict | None:
-    """Full reflection cycle: draft → open → vote → tally → apply.
-
-    Returns a summary dict (or None if nothing was proposed).
-    """
-    proposal = draft_proposal(conn, config, use_llm)
-    if proposal is None:
-        return None
-
-    cur = conn.execute(
-        """INSERT INTO guideline_proposals
-           (kind, practice, guideline_id, proposed_text, source_round_id, created_at)
-           VALUES (?,?,?,?,?,?)""",
-        (proposal["kind"], proposal.get("practice", "good"),
-         proposal.get("guideline_id"), proposal["text"], source_round_id, _now()),
-    )
-    proposal_id = cur.lastrowid
-    conn.commit()
-
-    cast_votes(conn, proposal_id, proposal, config, use_llm)
-
-    votes = conn.execute(
-        "SELECT vote, COUNT(*) c FROM guideline_votes WHERE proposal_id=? GROUP BY vote",
-        (proposal_id,),
-    ).fetchall()
-    tally = {r["vote"]: r["c"] for r in votes}
-    agree = tally.get("agree", 0)
-    total = agree + tally.get("disagree", 0)
-    accepted = total > 0 and agree * 2 > total  # strict majority; tie => status quo
-
-    if accepted:
-        _apply(conn, proposal)
-    conn.execute(
-        "UPDATE guideline_proposals SET resolution=?, resolved_at=? WHERE id=?",
-        ("accepted" if accepted else "rejected", _now(), proposal_id),
-    )
-    conn.commit()
-
-    return {
-        "proposal_id": proposal_id,
-        "kind": proposal["kind"],
-        "practice": proposal.get("practice", "good"),
-        "text": proposal["text"],
-        "evidence": proposal.get("evidence", ""),
-        "agree": agree,
-        "total": total,
-        "accepted": accepted,
-    }
-
-
 def _apply(conn, proposal: dict, tier: str | None = None,
            ledger: dict | None = None) -> None:
     if proposal["kind"] == "add":
@@ -296,34 +79,6 @@ def _apply(conn, proposal: dict, tier: str | None = None,
             (_now(), f"voted out (proposed by {proposal.get('proposer', '?')})",
              proposal["guideline_id"]),
         )
-
-
-# ---- optional LLM delegation (best-effort, falls back to heuristics) ----
-
-def _llm_draft(conn, config):
-    try:
-        from .llm import groq_available
-        if not groq_available():
-            return None
-        from .llm import llm_draft_guideline
-        sample = _recent_stats(conn, config.reflection_interval * 2)
-        if len(sample) < config.reflection_min_sample:
-            return None
-        return llm_draft_guideline(sample, active_texts(conn))
-    except Exception:
-        return None
-
-
-def _llm_vote(lin, proposal):
-    try:
-        from .llm import groq_available
-        if not groq_available():
-            return _heuristic_vote(lin, proposal)
-        from .llm import llm_vote_guideline
-        cfg = json.loads(lin["strategy_config"])
-        return llm_vote_guideline(cfg, proposal)
-    except Exception:
-        return _heuristic_vote(lin, proposal)
 
 
 # ---- the agent-driven constitution ---------------------------------------
@@ -361,54 +116,16 @@ def _universe_symbols() -> set[str]:
     return syms | {x.split("-")[0] for x in syms if x.endswith("-USD")}
 
 
-def _names_a_ticker(text: str, symbols: set[str]) -> bool:
-    """A shared rule must apply to ANY name. Rules that name a specific
-    ticker ('Monitor AAVE-USD…') are just one agent's trade idea broadcast to
-    the whole pool — they'd herd everyone into the same names. Only ALL-CAPS
-    tokens count, so ordinary words ('now', 'all', 'on') don't false-match."""
-    import re
-    for tok in re.findall(r"\b[A-Z][A-Z0-9.\-]{1,9}\b", text):
-        if tok in symbols or tok.endswith("-USD"):
-            return True
-    return False
 
 
-_VAGUE_STARTS = ("monitor", "consider", "keep an eye", "be careful", "be mindful",
-                 "stay ", "remember", "think about", "pay attention", "watch ")
 
 
-_OUT_OF_CONTROL = ("forced", "round-end", "round end", "deadline", "close-out",
-                   "closeout", "end of the round", "end of round")
 
 
-def _about_arena_mechanics(text: str) -> bool:
-    """Rules about the arena's own automatic actions (deadline close-out,
-    forced sells) — agents can't control them, yet kept proposing rules about
-    them even with those trades labelled forced_by_arena."""
-    low = text.lower()
-    return any(k in low for k in _OUT_OF_CONTROL)
 
 
-def _vague(text: str) -> bool:
-    """'Monitor RSI…', 'Consider the trend…' — advice, not a rule anyone can
-    follow or check. The first agent-written rulebook filled up with these."""
-    return text.lower().lstrip().startswith(_VAGUE_STARTS)
 
 
-def _normalise_rule(text: str, practice: str) -> tuple[str, str]:
-    """'DO: Avoid X' / 'Never X' / "Don't X" -> practice='bad', text='X'.
-    One idea per rule: anything after a ';' is dropped (the model tends to
-    staple a DO onto an AVOID, which makes the label wrong for half of it)."""
-    t = text.strip().split(";")[0].strip()
-    for pre in ("DO:", "Do:", "AVOID:", "Avoid:"):
-        if t.startswith(pre):
-            practice = "bad" if pre.lower().startswith("avoid") else practice
-            t = t[len(pre):].strip()
-    low = t.lower()
-    for verb in ("avoid ", "don't ", "do not ", "never "):
-        if low.startswith(verb):
-            return t[len(verb):].strip().rstrip("."), "bad"
-    return t.rstrip("."), practice
 
 
 def _lineage_cfg(lin: dict) -> dict:
@@ -418,8 +135,6 @@ def _lineage_cfg(lin: dict) -> dict:
         return {}
 
 
-def _norm(text: str) -> str:
-    return " ".join(text.lower().replace(".", " ").split())
 
 
 def _ask_json(model: str | None, system: str, payload: dict) -> dict | None:

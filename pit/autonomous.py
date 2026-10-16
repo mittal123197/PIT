@@ -16,8 +16,7 @@ import time
 
 from . import market
 from .config import DEFAULT, MARKET
-from .llm import (AGENT_AWARE, DEFAULT_MODEL, _is_retryable, groq_available,
-                  groq_recently_rate_limited, llm_chat)
+from .llm import AGENT_AWARE, DEFAULT_MODEL, _is_retryable, llm_available, llm_chat
 
 MAX_RESEARCH_TURNS = int(os.getenv("PIT_RESEARCH_TURNS", "1"))
 
@@ -263,10 +262,9 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
             "raw_response": data,
         })
 
-    if not groq_available():
-        return [], view.get("notes", ""), "", trace
-
     model = model or DEFAULT_MODEL
+    if not llm_available(model):
+        return [], view.get("notes", ""), "", trace
     context = {
         # live sessions are time-based: `day` is just the decision count, which
         # agents read as calendar days ("Day 9, 4 min left") — name it plainly
@@ -337,18 +335,6 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
                 if attempt < 2 and (_is_retryable(exc) or malformed):
                     time.sleep(0 if malformed else
                               int(os.getenv("PIT_RATELIMIT_BACKOFF", "15")))
-                    # On the last retry, rescue an OpenRouter agent onto
-                    # Groq's DEFAULT_MODEL so it still acts — but ONLY if
-                    # Groq itself hasn't been rate-limited recently. A Groq-
-                    # native call (no "openrouter:" prefix) has nowhere else
-                    # to fall back to, and rescuing onto a Groq quota that's
-                    # ALSO already struggling would just pile this agent's
-                    # failure onto the same shared quota a Groq-native agent
-                    # depends on — spreading one provider's outage onto both.
-                    is_cross_provider = active_model.startswith("openrouter:")
-                    if (attempt == 1 and is_cross_provider and groq_available()
-                            and not groq_recently_rate_limited()):
-                        active_model = DEFAULT_MODEL
                     continue
                 trace.append({"turn": turn + 1, "model": active_model,
                               "thoughts": f"[llm-error {type(exc).__name__}]",
@@ -356,7 +342,7 @@ def decide(view: dict, day: int, total_days: int, goal_pct: float,
                               "done": True, "orders": None, "message": None,
                               "raw_response": None})
                 return (_clean_orders([]),
-                        view.get("notes", "") + f" [llm-error {type(exc).__name__}]",
+                        view.get("notes", ""),
                         "", trace)
         if data is None:
             return [], view.get("notes", ""), "", trace

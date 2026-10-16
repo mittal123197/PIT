@@ -1,12 +1,17 @@
-"""Forward (live) paper trading over real calendar days.
+"""A round's lifecycle: the pool, orders and fills, stops, resolution, evolution.
 
-Unlike the compressed-replay engine, a forward round stays OPEN across real
-trading days. Each day (call `step_round` after the NSE close) every agent
-researches the real market and trades paper money; positions carry to the next
-day. After `length_days` processed trading days the round resolves with the same
-cascade + stakes + ELO + mutation as the replay engine.
+  start_round      every lineage's current agent gets the same flat stake
+  _execute         an agent's orders -> fills (sells first, buys scaled to
+                   cash, half the spread paid, per-position stop set)
+  check_position_stops / _liquidate / close_out_all_positions
+                   the arena's forced exits (position stop, portfolio stop,
+                   take-profit, deadline)
+  _resolve         rank the pool, ELO, stakes, each agent's self-reflection
+                   (winner reinforces, everyone else becomes a new
+                   generation), charter revision, then the rulebook pass
 
-Paper only: fills are at the real last close, no real orders anywhere.
+pit/live.py drives a round in real (or replayed) time; this module owns what
+happens to money and to agents. Paper only — no real orders anywhere.
 """
 from __future__ import annotations
 
@@ -43,20 +48,9 @@ def local_ts() -> str:
 
 # ---- seeding autonomous agents -----------------------------------------
 
-# All three lineages default to DeepSeek now (explicit call: consolidate
-# onto one cheap, non-shared, metered provider rather than juggling Groq's
-# free-tier limits and OpenRouter's shared :free pool). Trade-off worth
-# knowing: this gives up the earlier "different providers so one outage
-# doesn't take out the whole pool" property (see llm.groq_recently_rate_limited
-# and its docstring) — a DeepSeek outage now affects all three at once.
-# "deepseek:<model>" / "openrouter:<model>" prefixes route in llm.llm_chat;
-# no prefix routes straight to Groq. Override any of these via env if you
-# want a mixed pool again (e.g. PIT_LYNX_MODEL=openai/gpt-oss-20b for Groq).
+# Each lineage's model, provider-prefixed (see llm.llm_chat). Set in .env;
+# an existing agent is switched to the configured model at the next round.
 _RONIN_MODEL = os.getenv("PIT_RONIN_MODEL", "deepseek:deepseek-v4-flash")
-# All default to the cheap model (flash, not pro — pro runs ~3x the cost)
-# while spend is being kept deliberately small. Bump any one of these to
-# deepseek:deepseek-v4-pro yourself once you want the "does extra reasoning
-# depth help" experiment — that's opt-in, not a default.
 _VIPER_MODEL = os.getenv("PIT_VIPER_MODEL", "deepseek:deepseek-v4-flash")
 _LYNX_MODEL = os.getenv("PIT_LYNX_MODEL", "deepseek:deepseek-v4-flash")
 
@@ -139,9 +133,7 @@ def start_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
         conn.execute(
             """INSERT INTO round_states (round_id, agent_id, starting_capital,
                current_capital, holdings) VALUES (?,?,?,?, '{}')""",
-            (rid, lin["current_agent_id"], *([lin["current_stake"]] * 2
-                                              if config.stake_evolution
-                                              else [config.base_capital] * 2)))
+            (rid, lin["current_agent_id"], config.base_capital, config.base_capital))
     conn.commit()
     return rid
 
@@ -153,127 +145,6 @@ def _active_round(conn):
 
 # ---- stepping one real trading day ------------------------------------
 
-def step_round(conn: sqlite3.Connection, config: ArenaConfig = DEFAULT,
-               trade_date: str | None = None, verbose: bool = True,
-               debug: bool = False) -> dict:
-    """Process one trading day for the active live round. Idempotent per date."""
-    rnd = _active_round(conn)
-    if not rnd:
-        return {"status": "no_active_round"}
-    date = trade_date or _today()
-    if not market.is_trading_day():
-        return {"status": "not_a_trading_day", "date": date}
-    already = conn.execute(
-        "SELECT 1 FROM live_days WHERE round_id=? AND trade_date=?",
-        (rnd["id"], date)).fetchone()
-    if already:
-        return {"status": "already_processed", "date": date}
-
-    states = {r["agent_id"]: dict(r) for r in conn.execute(
-        "SELECT * FROM round_states WHERE round_id=?", (rnd["id"],)).fetchall()}
-    # snapshotted ONCE, before anyone this cycle trades — see _held_by_rivals
-    holdings_snapshot = {aid: set(json.loads(st["holdings"]).keys())
-                        for aid, st in states.items()}
-    guidelines = gmod.active_texts(conn)
-    quote_cache: dict[str, float | None] = {}
-
-    def price(t):
-        if t not in quote_cache:
-            q = market.quote(t)
-            quote_cache[t] = q["price"] if q else None
-        return quote_cache[t]
-
-    def value(st):
-        h = json.loads(st["holdings"])
-        return st["current_capital"] + sum(
-            qty * (price(t) or 0.0) for t, qty in h.items())
-
-    # start-of-day scoreboard (snapshot before anyone trades)
-    returns = {aid: (value(st) / st["starting_capital"] - 1) * 100
-               for aid, st in states.items()}
-
-    day_index = conn.execute(
-        "SELECT COUNT(*) n FROM live_days WHERE round_id=?", (rnd["id"],)
-    ).fetchone()["n"] + 1
-    logs = []
-
-    for aid, st in states.items():
-        if st["status"] != "active":
-            continue
-        # per-position hard stop — independent of the portfolio-level one
-        # below: cuts a single collapsing holding on its own, before the
-        # AGGREGATE book has to fall this far to react.
-        n_stopped = check_position_stops(conn, rnd["id"], aid, st, price, date, config)
-        if n_stopped:
-            logs.append(f"{_name(conn, aid)}: {n_stopped} position(s) hit their "
-                        f"per-position stop-loss")
-            returns[aid] = (value(st) / st["starting_capital"] - 1) * 100
-        # stop-loss / take-profit (both hard constraints, portfolio-level)
-        if returns[aid] <= -round_stop_pct(rnd, config):
-            _liquidate(conn, rnd["id"], aid, st, price, date, reason="stop-loss")
-            logs.append(f"{_name(conn, aid)} stopped out at {returns[aid]:.1f}%")
-            continue
-        if returns[aid] >= rnd["goal_pct"]:
-            _liquidate(conn, rnd["id"], aid, st, price, date, reason="goal-hit")
-            logs.append(f"{_name(conn, aid)} booked profit at {returns[aid]:.1f}%")
-            continue
-
-        agent = conn.execute("SELECT * FROM agents WHERE id=?", (aid,)).fetchone()
-        cfg = json.loads(agent["strategy_config"])
-        holdings = json.loads(st["holdings"])
-        positions = [{"ticker": t, "qty": q, "price": price(t),
-                      "value": round(q * (price(t) or 0), 2)}
-                     for t, q in holdings.items()]
-        view = {
-            "cash": round(st["current_capital"], 2),
-            "positions": positions,
-            "total_value": round(value(st), 2),
-            "return_pct": round(returns[aid], 2),
-            "opponent_return_pct": round(
-                max((r for a, r in returns.items() if a != aid), default=0.0), 2),
-            "notes": cfg.get("notes", ""),
-            "rival_returns": {_name(conn, a): round(r, 2)
-                              for a, r in returns.items() if a != aid},
-        }
-        view["rival_messages"] = _recent_messages(conn, rnd["id"], aid)
-        orders, notes, message, trace = autonomous.decide(
-            view, day_index, rnd["length_days"], rnd["goal_pct"], guidelines,
-            model=cfg.get("model"))
-        if debug:
-            from .live import _persist_audit
-            _persist_audit(conn, rnd["id"], aid, trace)
-        n_exec = _execute(conn, rnd["id"], aid, st, orders, price, date)
-        if message:
-            conn.execute("INSERT INTO agent_messages (round_id, agent_id, ts, "
-                         "message) VALUES (?,?,?,?)", (rnd["id"], aid, _now(),
-                                                    _redact_tickers(message)))
-        cfg["notes"] = notes
-        conn.execute("UPDATE agents SET strategy_config=? WHERE id=?",
-                     (json.dumps(cfg), aid))
-        conn.execute("UPDATE round_states SET current_capital=?, holdings=? "
-                     "WHERE round_id=? AND agent_id=?",
-                     (st["current_capital"], json.dumps(json.loads(st["holdings"])),
-                      rnd["id"], aid))
-        logs.append(f"{_name(conn, aid)}: {n_exec} trades, ret {returns[aid]:+.2f}%")
-
-    # mark drawdown + persist day
-    for aid, st in states.items():
-        _update_drawdown(conn, rnd["id"], aid, returns[aid])
-    conn.execute("INSERT INTO live_days (round_id, trade_date, processed_at) "
-                 "VALUES (?,?,?)", (rnd["id"], date, _now()))
-    conn.commit()
-
-    done = conn.execute("SELECT COUNT(*) n FROM live_days WHERE round_id=?",
-                        (rnd["id"],)).fetchone()["n"]
-    if verbose:
-        for l in logs:
-            print("  " + l)
-    if done >= rnd["length_days"]:
-        outcome = _resolve(conn, rnd, config, price)
-        return {"status": "resolved", "day": done, "date": date,
-                "logs": logs, "outcome": outcome}
-    return {"status": "stepped", "day": done, "of": rnd["length_days"],
-            "date": date, "logs": logs}
 
 
 # Bounds on an agent-chosen per-position stop (stop_loss_pct on a buy).
@@ -636,7 +507,7 @@ def _resolve(conn, rnd, config, price) -> dict:
     # outlasted a rival who lost on its own. Cap the reward accordingly.
     passive_win = states[winner_id]["trade_count"] == 0
 
-    stake_mult, notes = {}, {}
+    notes = {}
     if all_stopped_out:
         notes[winner_id] = _reflect_loser(conn, rnd["id"], agents_by_id[winner_id],
                                           agents_by_id[winner_id]["rating"] + net_delta[winner_id],
@@ -644,47 +515,18 @@ def _resolve(conn, rnd, config, price) -> dict:
     else:
         notes[winner_id] = _reflect_winner(conn, rnd["id"], agents_by_id[winner_id],
                                            summaries[winner_id].return_pct)
-    # Winning the round and actually making money are different things —
-    # the base bonus below pays out even when 1st just lost the least. This
-    # extra only fires on a genuinely positive return, and it's funded by
-    # redistribution (see the losers' loop below), not printed for free.
-    # No bonus of any kind unless the winner actually made money: coming
-    # 1st at 0% or below just means it lost the least, and that shouldn't
-    # grow its stake.
-    made_money = (not all_stopped_out) and summaries[winner_id].return_pct > 0
-    positive_delta_bonus = config.win_positive_delta_bonus_pct if made_money else 0.0
-    wd = ((config.passive_win_stake_bonus_pct if passive_win
-           else config.win_stake_bonus_pct) / 100.0) if made_money else 0.0
-    # Stakes only compound when stake_evolution is on; otherwise everyone
-    # stays flat and multipliers are recorded as 1.0 (the honest value).
-    stake_mult[winner_id] = ((1 + wd + positive_delta_bonus / 100.0)
-                             if config.stake_evolution else 1.0)
-    flat = None if config.stake_evolution else config.base_capital
+    # Every agent starts every round with the same base capital (flat stakes:
+    # compounding let early luck snowball into a capital edge). Rank 1
+    # reinforces; every other rank self-critiques into a new generation.
+    stake_mult = {aid: 1.0 for aid in ranking}
     _apply_lineage(conn, agents_by_id[winner_id]["lineage_id"],
-                   summaries[winner_id].return_pct, True, stake_mult[winner_id], flat)
-
-    # Base penalty per loser, computed before redistribution — dead last
-    # takes the full penalty, anyone strictly in the middle takes a smaller
-    # one. The winner's positive_delta_bonus above (if any) is then split
-    # across these ranks in proportion to each one's OWN base penalty, so
-    # last (already penalized more) absorbs proportionally more of it too —
-    # never all dumped onto one rank, and this naturally generalizes past 3
-    # participants instead of hardcoding "2nd and 3rd."
-    losers = ranking[1:]
-    base_penalty = {aid: (config.loss_stake_penalty_pct if aid == loser_id
-                          else config.middle_place_penalty_pct)
-                    for aid in losers}
-    total_base_penalty = sum(base_penalty.values())
-    for aid in losers:
-        share = (base_penalty[aid] / total_base_penalty) if total_base_penalty else (
-            1.0 / len(losers) if losers else 0.0)
-        penalty_pct = base_penalty[aid] + positive_delta_bonus * share
-        stake_mult[aid] = (1 - penalty_pct / 100.0) if config.stake_evolution else 1.0
+                   summaries[winner_id].return_pct, True)
+    for aid in ranking[1:]:
         notes[aid] = _reflect_loser(conn, rnd["id"], agents_by_id[aid],
                                     agents_by_id[aid]["rating"] + net_delta[aid],
                                     summaries[aid].return_pct)
         _apply_lineage(conn, agents_by_id[aid]["lineage_id"],
-                       summaries[aid].return_pct, False, stake_mult[aid], flat)
+                       summaries[aid].return_pct, False)
 
     for rank_pos, aid in enumerate(ranking, start=1):
         conn.execute(
@@ -705,27 +547,21 @@ def _resolve(conn, rnd, config, price) -> dict:
          summaries[loser_id].return_pct, net_delta[winner_id], notes[winner_id],
          notes[loser_id], int(all_stopped_out), int(passive_win), _now()))
 
-    # Shared "constitution": every reflection_interval rounds, look across ALL
-    # lineages for a pattern that keeps recurring (not a one-off) and let the
-    # pool vote on codifying it. Accepted guidelines are injected into every
-    # agent's context from then on — the "commonly agreed good practices"
-    # layer, independent of and in addition to each lineage's own reflection.
-    # Everyone stopping out ALWAYS forces this pass early, regardless of the
-    # interval — the whole pool just failed together in the same conditions,
-    # which is exactly the kind of shared signal worth discussing immediately.
+    # The pool's rulebook pass (review -> propose -> research -> debate ->
+    # vote, see guidelines.pool_constitution) — after every round by default,
+    # always when everyone stopped out. Needs at least one agent's model to be
+    # reachable; otherwise the rulebook simply waits for the next round.
     reflection, reflections = None, []
     if all_stopped_out or (config.reflection_enabled
             and rnd["round_number"] % config.reflection_interval == 0):
         from . import guidelines as gmod
-        from .llm import groq_available
-        if groq_available():
-            # the agents propose and vote on rules themselves, each with its
-            # own model and its own experience (guidelines.pool_constitution)
+        from .llm import llm_available
+        if any(llm_available(l.get("model")) for l in
+               (json.loads(r["strategy_config"] or "{}") for r in conn.execute(
+                   "SELECT a.strategy_config FROM lineages l "
+                   "JOIN agents a ON a.id = l.current_agent_id").fetchall())):
             reflections = gmod.pool_constitution(conn, config, rnd["id"])
             reflection = next((r for r in reflections if r.get("kind")), None)
-        else:   # offline: deterministic stats heuristic
-            reflection = gmod.open_and_resolve(conn, config, rnd["id"], use_llm=False)
-            reflections = [reflection] if reflection else []
 
     conn.execute("UPDATE rounds SET status='resolved', deadline=? WHERE id=?",
                  (_today(), rnd["id"]))
@@ -741,37 +577,14 @@ def _resolve(conn, rnd, config, price) -> dict:
             "reflection": reflection, "reflections": reflections}
 
 
-def _apply_lineage(conn, lid, ret, won, mult, flat_stake=None):
+def _apply_lineage(conn, lid, ret, won):
     lin = conn.execute("SELECT * FROM lineages WHERE id=?", (lid,)).fetchone()
-    new_stake = (flat_stake if flat_stake is not None
-                 else max(1.0, lin["current_stake"] * mult))
     new_cum = ((1 + lin["cumulative_return_pct"] / 100) * (1 + ret / 100) - 1) * 100
-    conn.execute("""UPDATE lineages SET current_stake=?, cumulative_return_pct=?,
+    conn.execute("""UPDATE lineages SET cumulative_return_pct=?,
                  wins=wins+?, losses=losses+? WHERE id=?""",
-                 (round(new_stake, 2), round(new_cum, 4), int(won), int(not won), lid))
+                 (round(new_cum, 4), int(won), int(not won), lid))
 
 
-def _rival_recent_moves(conn, round_id, self_aid, limit=8) -> list[dict]:
-    """The latest buys/sells by the OTHER agents this round — who, side,
-    ticker, when. Deliberately no price, size or reasoning (same limits as
-    rival_held_tickers); round-end/forced closes are left out since they're
-    the arena acting, not a rival's decision."""
-    rows = conn.execute(
-        """SELECT t.ts, t.side, t.symbol, t.reason, l.name
-           FROM trades t JOIN agents a ON a.id=t.agent_id
-           JOIN lineages l ON l.id=a.lineage_id
-           WHERE t.round_id=? AND t.agent_id!=?
-           ORDER BY t.id DESC LIMIT ?""", (round_id, self_aid, limit * 3)).fetchall()
-    out = []
-    for r in rows:
-        reason = (r["reason"] or "")
-        if reason in ("round-end close", "stop-loss", "goal-hit") or reason.startswith("position stop"):
-            continue
-        out.append({"rival": r["name"], "side": r["side"], "ticker": r["symbol"],
-                    "at": _agent_ts(r["ts"])})
-        if len(out) >= limit:
-            break
-    return out
 
 
 FORCED_REASONS = ("round-end close", "stop-loss", "goal-hit")
@@ -1011,8 +824,8 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool,
                     "decision call before assuming this is a real strategy.")
         return "Made zero trades and still lost — likely a decision/data failure, not a strategy choice."
     try:
-        from .llm import DEFAULT_MODEL, groq_available, llm_chat
-        if groq_available():
+        from .llm import DEFAULT_MODEL, llm_available, llm_chat
+        if llm_available(model):
             import json as _j
             # The agent reflects with its OWN brain (its own model), and the
             # question is open-ended. The old prompt handed every agent the
@@ -1051,30 +864,8 @@ def _self_reflection(old_notes, own_trades, return_pct, won: bool,
     return f"{verb}: traded {syms} at {return_pct:+.2f}%."
 
 
-def _held_by_rivals(holdings_snapshot: dict, self_aid: int) -> list[str]:
-    """Every ticker any OTHER participant held as of THIS tick's start — the
-    "no duplicate stock" hard rule. Snapshotted once per tick/day, before
-    anyone this cycle has traded — not updated as agents execute within the
-    same cycle, so processing order can't hand one agent a race-condition
-    advantage over the others (whoever a for-loop happens to reach first)."""
-    held = set()
-    for aid, tickers in holdings_snapshot.items():
-        if aid != self_aid:
-            held |= tickers
-    return sorted(held)
 
 
-def _drop_blocked_buys(orders: list[dict], blocked: set) -> tuple[list[dict], list[str]]:
-    """Strip any BUY for a ticker a rival already holds (see
-    _held_by_rivals) — sells are never blocked. Server-side enforcement,
-    independent of whether the agent's own reasoning respected the rule."""
-    clean, rejected = [], []
-    for o in orders:
-        if o.get("side") == "buy" and o.get("ticker") in blocked:
-            rejected.append(o["ticker"])
-            continue
-        clean.append(o)
-    return clean, rejected
 
 
 def _recent_messages(conn, round_id, agent_id, limit=4,
@@ -1152,13 +943,3 @@ def _name(conn, agent_id) -> str:
         "SELECT l.name FROM agents a JOIN lineages l ON l.id=a.lineage_id "
         "WHERE a.id=?", (agent_id,)).fetchone()["name"]
 
-
-def status(conn) -> dict | None:
-    rnd = _active_round(conn)
-    if not rnd:
-        return None
-    done = conn.execute("SELECT COUNT(*) n FROM live_days WHERE round_id=?",
-                        (rnd["id"],)).fetchone()["n"]
-    return {"round_id": rnd["id"], "round_number": rnd["round_number"],
-            "days_done": done, "length_days": rnd["length_days"],
-            "goal_pct": rnd["goal_pct"], "started": rnd["start_at"]}

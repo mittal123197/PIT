@@ -1,194 +1,35 @@
 """Command-line entrypoint for the arena.
 
-    python -m pit.cli init                 # create DB + seed two lineages
-    python -m pit.cli run-round            # run one duel, print the result
-    python -m pit.cli arena --rounds 5     # run several duels back to back
-    python -m pit.cli leaderboard          # standings
-    python -m pit.cli history [--round N]  # trades + results
+    python -m pit.cli live --minutes 60 --interval 300     # a live US/crypto battle
+    python -m pit.cli live --replay --date 2026-10-09 --compress 10
+    python -m pit.cli leaderboard                          # standings
+    python -m pit.cli guidelines                           # the pool's rulebook
+    python -m pit.cli history [--round N]                  # results / trades
 
-By default everything runs offline: deterministic policy + synthetic feed. Add
---feed historical for yfinance NSE replay, or set PIT_USE_LLM=1 (with a
-GROQ_API_KEY) to let Groq drive the agents and the mutation step.
+scripts/run_arena.sh wraps `live` (several battles, dashboard, keep-awake).
+The database and the three lineages are created on first use.
 """
 from __future__ import annotations
 
 import argparse
-import os
 
 from . import db as dbm
-from .config import DEFAULT
-from .engine import Engine
-from .feeds import HistoricalFeed, SyntheticFeed
-
-SEED_LINEAGES = [
-    ("CONTANGO", {"type": "momentum", "lookback": 5, "buy_threshold_pct": 1.0,
-                  "sell_threshold_pct": -1.5, "position_frac": 0.25,
-                  "heartbeat_minutes": 60}),
-    ("BACKWARDATION", {"type": "mean_reversion", "lookback": 10, "band_pct": 2.0,
-                       "position_frac": 0.25, "heartbeat_minutes": 120}),
-]
-
-
-def _policy_factory(use_llm: bool):
-    if use_llm:
-        from .llm import LLMPolicy, groq_available
-        if groq_available():
-            return lambda agent_row: LLMPolicy()
-        print("  (PIT_USE_LLM set but Groq unavailable — using deterministic policy)")
-    from .policies import SimplePolicy
-    return lambda agent_row: SimplePolicy()
-
-
-def _engine(conn, use_llm: bool) -> Engine:
-    from .llm import mutate_with_llm
-    return Engine(conn, config=DEFAULT, policy_factory=_policy_factory(use_llm),
-                  mutate_fn=mutate_with_llm, use_llm=use_llm)
-
-
-def _feed_factory(kind: str, round_number: int, bars_override: int | None = None):
-    """Return a callable `(length_days) -> PriceFeed`, sized to the round.
-
-    `--bars` overrides the day-based sizing (handy to keep LLM runs short).
-    """
-    def make(length_days: int):
-        bars = bars_override or DEFAULT.bars_for_days(length_days)
-        if kind == "historical":
-            try:
-                return HistoricalFeed(DEFAULT.universe, bars=bars)
-            except Exception as exc:
-                print(f"  historical feed unavailable ({exc}); using synthetic")
-        return SyntheticFeed(DEFAULT.universe, seed=1000 + round_number,
-                             bars=bars, bar_minutes=DEFAULT.bar_minutes)
-    return make
-
-
-def _lineage_ids(conn) -> list[int]:
-    return [r["id"] for r in conn.execute(
-        "SELECT id FROM lineages ORDER BY id").fetchall()]
 
 
 # ---- commands ---------------------------------------------------------
 
-def cmd_init(args):
-    if args.fresh:
-        dbm.reset_db()
-        print("Wiped existing DB.")
-    conn = dbm.connect()
-    dbm.init_db(conn)
-    existing = conn.execute("SELECT COUNT(*) c FROM lineages").fetchone()["c"]
-    if existing:
-        print(f"DB ready — {existing} lineages already present.")
-        return
-    eng = _engine(conn, use_llm=False)
-    for name, cfg in SEED_LINEAGES:
-        eng.create_lineage(name, cfg)
-        print(f"  seeded lineage: {name} ({cfg['type']})")
-    print(f"Initialised at {dbm.DEFAULT_DB_PATH}")
 
 
-def cmd_run_round(args):
-    conn = dbm.connect()
-    dbm.init_db(conn)
-    use_llm = os.getenv("PIT_USE_LLM", "0") not in ("0", "", "false")
-    eng = _engine(conn, use_llm)
-    ids = _lineage_ids(conn)
-    if len(ids) < 2:
-        print("Need at least 2 lineages. Run `init` first.")
-        return
-    factory = _feed_factory(args.feed, eng._next_round_number(), args.bars)
-    out = eng.run_round(ids[0], ids[1], feed_factory=factory)
-    _print_outcome(out)
-    _print_reflection(eng.last_reflection)
 
 
-def cmd_arena(args):
-    conn = dbm.connect()
-    dbm.init_db(conn)
-    use_llm = os.getenv("PIT_USE_LLM", "0") not in ("0", "", "false")
-    eng = _engine(conn, use_llm)
-    ids = _lineage_ids(conn)
-    if len(ids) < 2:
-        print("Need at least 2 lineages. Run `init` first.")
-        return
-    for _ in range(args.rounds):
-        factory = _feed_factory(args.feed, eng._next_round_number(), args.bars)
-        out = eng.run_round(ids[0], ids[1], feed_factory=factory)
-        _print_outcome(out)
-        _print_reflection(eng.last_reflection)
-    print()
-    _print_leaderboard(conn)
 
 
-def cmd_forward_start(args):
-    from . import forward
-    conn = dbm.connect()
-    dbm.init_db(conn)
-    try:
-        rid = forward.start_round(conn, days=args.days)
-    except RuntimeError as exc:
-        print(f"  {exc}")
-        return
-    from .config import CURRENCY
-    st = forward.status(conn)
-    print(f"Live round #{st['round_number']} started — {st['length_days']} "
-          f"trading days, goal {st['goal_pct']}%, two autonomous agents from "
-          f"{CURRENCY}{DEFAULT.base_capital:,.0f} paper each.")
-    print("  Run `pit forward-step` once per day after the NSE close (~15:30 IST).")
 
 
-def cmd_forward_step(args):
-    from . import forward
-    from .llm import groq_available
-    if not groq_available():
-        print("  Autonomous agents need Groq. Set GROQ_API_KEY (and PIT_USE_LLM is\n"
-              "  not required for forward mode).")
-        return
-    conn = dbm.connect()
-    dbm.init_db(conn)
-    print("Stepping the live round (agents researching real market)...")
-    res = forward.step_round(conn, trade_date=args.date)
-    status = res.get("status")
-    if status in ("no_active_round", "already_processed", "not_a_trading_day"):
-        print(f"  {status.replace('_', ' ')}" + (f" ({res.get('date')})" if res.get('date') else ""))
-        return
-    if status == "resolved":
-        o = res["outcome"]
-        ranking = o.get("ranking") or []
-        print(f"\n  Day {res['day']} — ROUND RESOLVED")
-        if o.get("both_stopped_out"):
-            print(f"  DOUBLE STOP-OUT — everyone got liquidated. "
-                  f"{o['winner']} {o['winner_return']:+.2f}% was merely less bad "
-                  f"than the rest ({o['reason']})")
-        elif o.get("passive_win"):
-            print(f"  {o['winner']} wins {o['winner_return']:+.2f}% on ZERO TRADES "
-                  f"(capped stake bonus) ({o['reason']})")
-        elif len(ranking) > 2:
-            print(f"  {len(ranking)}-way ({o['reason']})")
-        else:
-            print(f"  WINNER {o['winner']} {o['winner_return']:+.2f}%  "
-                  f"beat {o['loser']} {o['loser_return']:+.2f}% ({o['reason']})")
-        if len(ranking) > 2:
-            for r in ranking:
-                tag = ("reinforces" if r["rank"] == 1 and not o.get("both_stopped_out")
-                      else "self-critiques")
-                print(f"  #{r['rank']} {r['name']:<8} {r['return_pct']:+.2f}%  "
-                      f"{tag}: {r['note']}")
-        else:
-            print(f"  {o['winner']} self-critiques: {o.get('winner_note', '')}"
-                  if o.get("both_stopped_out") else
-                  f"  {o['winner']} reinforces: {o.get('winner_note', '')}")
-            print(f"  {o['loser']} self-critiques: {o['mutation_note']}")
-        _print_reflection(o.get("reflection"))
-    else:
-        print(f"\n  Day {res['day']} of {res['of']} processed ({res['date']}).")
 
 
 def cmd_live(args):
     from . import live, replay
-    from .llm import groq_available
-    if not groq_available():
-        print("  Live agents need Groq. Set GROQ_API_KEY in pit/.env.")
-        return
     conn = dbm.connect()
     dbm.init_db(conn)
     if args.replay:
@@ -209,16 +50,6 @@ def cmd_live(args):
                       refresh=args.refresh, debug=args.debug)
 
 
-def cmd_forward_status(args):
-    from . import forward
-    conn = dbm.connect()
-    dbm.init_db(conn)
-    st = forward.status(conn)
-    if not st:
-        print("No live round in progress. Start one with `pit forward-start`.")
-        return
-    print(f"Live round #{st['round_number']}: day {st['days_done']}/"
-          f"{st['length_days']}, goal {st['goal_pct']}%, started {st['started']}.")
 
 
 def cmd_guidelines(args):
@@ -229,8 +60,8 @@ def cmd_guidelines(args):
     print("\nActive guidelines (the pool's constitution)")
     print("-" * 68)
     if not active:
-        print("  (none yet — a reflection pass proposes one every "
-              f"{DEFAULT.reflection_interval} rounds if a pattern recurs)")
+        print("  (none yet — agents propose rules after each round; the arena "
+              "researches and the pool debates and votes)")
     for g in active:
         print(f"  #{g['id']} (v{g['version']}): {g['text']}")
 
@@ -329,62 +160,34 @@ def cmd_history(args):
 
 # ---- printing ---------------------------------------------------------
 
-def _print_outcome(out):
-    print(f"\nRound {out.round_number}  ({out.length_days}d)  "
-          f"— resolved by {out.reason}")
-    print(f"  WINNER  {out.winner_lineage:<14} {out.winner_return_pct:+.2f}%   "
-          f"(ELO +{out.rating_delta})")
-    print(f"  loser   {out.loser_lineage:<14} {out.loser_return_pct:+.2f}%")
-    print(f"  mutation → {out.loser_lineage}: {out.mutation_note}")
 
 
-def _print_reflection(ref):
-    if not ref:
-        return
-    verdict = "ADOPTED" if ref["accepted"] else "rejected"
-    practice = ref.get("practice", "good").upper()
-    print(f"  reflection → proposal to {ref['kind']} a {practice} PRACTICE "
-          f"guideline [{verdict}, {ref['agree']}/{ref['total']} agreed]")
-    print(f"             \"{ref['text']}\"")
 
 
 def _print_leaderboard(conn):
     rows = conn.execute(
         """SELECT l.name, l.wins, l.losses, l.cumulative_return_pct,
-                  l.current_stake, a.generation, a.rating
+                  a.generation, a.rating
            FROM lineages l JOIN agents a ON a.id = l.current_agent_id
            ORDER BY a.rating DESC""",
     ).fetchall()
     print("Leaderboard")
     print("-" * 74)
     print(f"  {'#':<3}{'Lineage':<15}{'Rating':>8}{'W-L':>8}{'Gen':>5}"
-          f"{'Cum%':>9}{'Stake':>12}")
+          f"{'Cum%':>9}")
     print("-" * 74)
     for i, r in enumerate(rows, 1):
         wl = f"{r['wins']}-{r['losses']}"
         print(f"  {i:<3}{r['name']:<15}{r['rating']:>8.0f}{wl:>8}"
-              f"{r['generation']:>5}{r['cumulative_return_pct']:>+9.2f}"
-              f"{r['current_stake']:>12,.0f}")
+              f"{r['generation']:>5}{r['cumulative_return_pct']:>+9.2f}")
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(prog="pit", description="Agent trading arena")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    pi = sub.add_parser("init", help="create DB and seed lineages")
-    pi.add_argument("--fresh", action="store_true", help="wipe existing DB first")
-    pi.set_defaults(func=cmd_init)
 
-    pr = sub.add_parser("run-round", help="run a single duel")
-    pr.add_argument("--feed", choices=["synthetic", "historical"], default="synthetic")
-    pr.add_argument("--bars", type=int, help="synthetic feed length (LLM runs: keep small)")
-    pr.set_defaults(func=cmd_run_round)
 
-    pa = sub.add_parser("arena", help="run several duels")
-    pa.add_argument("--rounds", type=int, default=5)
-    pa.add_argument("--feed", choices=["synthetic", "historical"], default="synthetic")
-    pa.add_argument("--bars", type=int, help="synthetic feed length (LLM runs: keep small)")
-    pa.set_defaults(func=cmd_arena)
 
     pl = sub.add_parser("leaderboard", help="show standings")
     pl.set_defaults(func=cmd_leaderboard)
@@ -392,16 +195,8 @@ def main(argv=None):
     pg = sub.add_parser("guidelines", help="show the pool's shared guidelines")
     pg.set_defaults(func=cmd_guidelines)
 
-    fs = sub.add_parser("forward-start", help="begin a live forward paper round")
-    fs.add_argument("--days", type=int, help="trading days (default: config)")
-    fs.set_defaults(func=cmd_forward_start)
 
-    fp = sub.add_parser("forward-step", help="run one real trading day (autonomous agents)")
-    fp.add_argument("--date", help="override the trade date (YYYY-MM-DD)")
-    fp.set_defaults(func=cmd_forward_step)
 
-    fst = sub.add_parser("forward-status", help="show the live round's progress")
-    fst.set_defaults(func=cmd_forward_status)
 
     lv = sub.add_parser("live", help="run a live session: agents trade + trash-talk")
     lv.add_argument("--minutes", type=int, default=180, help="session length")

@@ -29,54 +29,8 @@ def _agent_id(conn, name):
         "WHERE l.name=?", (name,)).fetchone()["id"]
 
 
-def test_zero_trade_winner_gets_the_capped_bonus_not_the_full_one(monkeypatch):
-    monkeypatch.setattr("pit.llm.groq_available", lambda: False)
-    conn = _fresh_conn()
-    config = ArenaConfig()
-    rid = forward.start_round(conn, config, days=7)
-    ronin_id, viper_id = _agent_id(conn, "RONIN"), _agent_id(conn, "VIPER")
-    # RONIN never trades (stays at starting capital); VIPER trades and loses
-    conn.execute("UPDATE round_states SET current_capital=100000, trade_count=0 "
-                 "WHERE round_id=? AND agent_id=?", (rid, ronin_id))
-    conn.execute("UPDATE round_states SET current_capital=88000, trade_count=3, "
-                 "status='liquidated' WHERE round_id=? AND agent_id=?", (rid, viper_id))
-    conn.commit()
-    rnd = dict(conn.execute("SELECT * FROM rounds WHERE id=?", (rid,)).fetchone())
-    outcome = forward._resolve(conn, rnd, config, lambda t: 100.0)
-
-    assert outcome["winner"] == "RONIN"
-    assert outcome["passive_win"] is True
-    stake = conn.execute("SELECT current_stake FROM lineages WHERE name='RONIN'").fetchone()["current_stake"]
-    # RONIN "won" at exactly 0% — it only avoided a rival's loss. No bonus
-    # of any kind unless the winner actually made money.
-    assert stake == 100000
 
 
-def test_genuine_active_winner_still_gets_the_full_bonus(monkeypatch):
-    monkeypatch.setattr("pit.llm.groq_available", lambda: False)
-    conn = _fresh_conn()
-    config = ArenaConfig()
-    rid = forward.start_round(conn, config, days=7)
-    ronin_id, viper_id = _agent_id(conn, "RONIN"), _agent_id(conn, "VIPER")
-    conn.execute("UPDATE round_states SET current_capital=105000, trade_count=2 "
-                 "WHERE round_id=? AND agent_id=?", (rid, ronin_id))
-    conn.execute("UPDATE round_states SET current_capital=95000, trade_count=1 "
-                 "WHERE round_id=? AND agent_id=?", (rid, viper_id))
-    conn.execute(
-        "INSERT INTO trades (round_id, agent_id, ts, symbol, side, qty, price, "
-        "capital_after, reason) VALUES (?,?,?,?,?,?,?,?,?)",
-        (rid, ronin_id, forward._now(), "AAA", "buy", 10, 100.0, 105000, "t"))
-    conn.commit()
-    rnd = dict(conn.execute("SELECT * FROM rounds WHERE id=?", (rid,)).fetchone())
-    outcome = forward._resolve(conn, rnd, config, lambda t: 100.0)
-
-    assert outcome["passive_win"] is False
-    stake = conn.execute("SELECT current_stake FROM lineages WHERE name='RONIN'").fetchone()["current_stake"]
-    # RONIN's return here is +5% (105000 vs 100000 starting) — genuinely
-    # positive, not just "lost the least" — so the extra positive-delta
-    # bonus is in play on top of the base win bonus (see forward._resolve).
-    assert stake == round(
-        100000 * (1 + (config.win_stake_bonus_pct + config.win_positive_delta_bonus_pct) / 100), 2)
 
 
 def test_passive_win_note_flags_it_instead_of_fabricating_a_story(monkeypatch):

@@ -106,7 +106,6 @@ def index():
         h2h=q.latest_head_to_head(conn),
         live=q.live_status(conn),
         elo_svg=q.elo_chart(conn),
-        stake_evolution=bool(DEFAULT.stake_evolution),
     )
 
 
