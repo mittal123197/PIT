@@ -129,6 +129,8 @@ def run_live(conn, config: ArenaConfig = DEFAULT, minutes: int = 180,
         "with exactly these columns (write your charter in terms of them — nothing "
         "else is available): " + brief_mod._HEADER.replace("|", ", ")
         + " · plus a line with SPY/QQQ since the open and market breadth"), verbose)
+    if replay._STATE:
+        replay.begin()      # the replayed session starts now, after charter setup
     end = time.time() + minutes * 60
     market_minutes = (risk.minutes_per_day("us") if replay._STATE else minutes)
     conn.execute("UPDATE rounds SET ends_at=?, interval_s=?, market=?, length_min=? WHERE id=?",
@@ -473,6 +475,7 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
                 max((r for a, r in returns.items() if a != aid), default=0.0), 2),
             "notes": cfg.get("notes", ""),
             "charter": cfg.get("charter", ""),
+            "charter_enforced": __import__("pit.charter", fromlist=["enforced"]).enforced(cfg),
             "charter_backtest": __import__("pit.charter", fromlist=["card_text"]).card_text(
                 cfg.get("charter_card"), cfg.get("charter_spec")) if cfg.get("charter") else "",
             "rival_messages": forward._recent_messages(conn, rnd["id"], aid,
@@ -528,7 +531,7 @@ def _tick(conn, config, rnd, tick, verbose, debug=False):
         ts = forward.local_ts()
         charter_rejects = []
         from . import charter as _ch
-        if brief and _ch.enforce_on() and cfg.get("charter_spec"):
+        if brief and _ch.enforced(cfg):
             kept = []
             for o in orders:
                 why = (_ch.entry_check(cfg["charter_spec"], (brief.get("features") or {}).get(o["ticker"]))

@@ -158,6 +158,9 @@ def revise_charter(model: str | None, charter: str, own_trades: list, return_pct
                         else "pre-round review: no trades yet"),
         "your_own_trades": own_trades[:30],
         "your_charter_discipline": discipline or {},
+        **({"warning": "This version reliably LOSES money after costs in the "
+                       "backtest (t <= -2). Keeping it is not an option: refine "
+                       "or rewrite it."} if _losing(card) else {}),
         **({"versions_already_tried": tried} if tried else {}),
         **({"rivals_charters": rivals} if rivals else {}),
         "instruction": (
@@ -324,3 +327,10 @@ def entry_check(spec: dict | None, feat: dict | None) -> str | None:
 def enforce_on() -> bool:
     import os
     return os.getenv("PIT_CHARTER_ENFORCE", "0") == "1"
+
+
+def enforced(cfg: dict) -> bool:
+    """Enforce this agent's charter? Only when enforcement is on and the
+    charter didn't reliably LOSE in its backtest — forcing an agent to trade
+    a proven loser would make the arena, not the agent, pick bad trades."""
+    return enforce_on() and bool(cfg.get("charter_spec")) and not _losing(cfg.get("charter_card"))

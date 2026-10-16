@@ -126,7 +126,6 @@ def decide(view: dict, decision_number: int, guidelines: list[str],
     model = model or DEFAULT_MODEL
     if not brief or not llm_available(model):
         return [], notes, "", trace
-    from .charter import enforce_on
     context = {
         "decision_number": decision_number,
         "your_cash": view["cash"], "your_positions": view["positions"],
@@ -142,7 +141,8 @@ def decide(view: dict, decision_number: int, guidelines: list[str],
         "your_charter_backtest": view.get("charter_backtest", ""),
         **({"charter_enforced": ("ON: any buy that doesn't meet your charter's entry "
                                  "conditions in the current table is rejected by the arena; "
-                                 "sells are never restricted")} if enforce_on() else {}),
+                                 "sells are never restricted")}
+           if view.get("charter_enforced") else {}),
         "your_notes": notes,
         "shared_guidelines": guidelines,
         "arena_risk": view.get("risk"),

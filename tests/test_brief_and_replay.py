@@ -46,3 +46,17 @@ def test_replay_serves_the_live_table_format_from_history(monkeypatch):
     finally:
         replay.stop()
     assert replay._STATE == {}
+
+
+def test_replay_clock_starts_when_trading_starts(monkeypatch):
+    import time as _t
+    monkeypatch.setattr("pit.history.panel", lambda *a, **k: _panel())
+    monkeypatch.setattr("pit.full_market.sp500_universe", lambda: [])
+    replay.start(day=datetime.date(2026, 10, 9), compress_minutes=10)
+    try:
+        replay._STATE["start_wall"] -= 600          # 10 minutes of "setup" pass
+        assert replay.sim_minutes_left() == 0       # without begin(): session gone
+        replay.begin()
+        assert replay.sim_minutes_left() > 14       # the whole session is back
+    finally:
+        replay.stop()

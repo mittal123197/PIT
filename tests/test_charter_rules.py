@@ -26,3 +26,13 @@ def test_losing_rewrite_cannot_replace_a_neutral_charter(monkeypatch):
     monkeypatch.setattr(charter, "backtest", lambda spec: {"train": {"trades": 40, "t": 1.0}})
     assert charter.accept(cfg, {"charter": "better style", "spec": SPEC}) is True
     assert cfg["charter_last_good"]["charter"] == "better style"
+
+
+def test_losing_charter_is_not_enforced(monkeypatch):
+    from pit import charter
+    monkeypatch.setenv("PIT_CHARTER_ENFORCE", "1")
+    spec = {"entry": [("RSI14", "<", 30.0)], "exit": [], "max_hold_min": 60}
+    assert charter.enforced({"charter_spec": spec, "charter_card": {"train": {"t": 0.5}}})
+    assert not charter.enforced({"charter_spec": spec, "charter_card": {"train": {"t": -3.1}}})
+    monkeypatch.setenv("PIT_CHARTER_ENFORCE", "0")
+    assert not charter.enforced({"charter_spec": spec, "charter_card": None})

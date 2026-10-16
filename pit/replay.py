@@ -62,6 +62,15 @@ def start(day: date | None = None, compress_minutes: int | None = None) -> None:
           f"({_STATE['speed']:.0f}x)", flush=True)
 
 
+def begin() -> None:
+    """(Re)start the replay clock now — called when trading actually starts,
+    after round setup (charter writing + backtest search can take minutes;
+    at 78x those minutes used to eat ~4 hours of the replayed session)."""
+    if _STATE:
+        _STATE["start_wall"] = time.time()
+        _STATE["brief_cache"] = {}
+
+
 def stop() -> None:
     global _ORIGINAL_QUOTE
     if _ORIGINAL_QUOTE is not None:
